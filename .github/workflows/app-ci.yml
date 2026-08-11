@@ -1,0 +1,101 @@
+# Continuous integration for the Go microservice.
+#
+# This workflow only ever validates: it builds the image and exercises it, but
+# never pushes anywhere and needs no secrets, so it runs safely on pull
+# requests from forks. Publishing and deployment are added in the pipeline
+# stage of this project.
+name: app-ci
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'scripts/smoke-test.sh'
+      - 'Makefile'
+      - '.github/workflows/app-ci.yml'
+  pull_request:
+    paths:
+      - 'app/**'
+      - 'scripts/smoke-test.sh'
+      - 'Makefile'
+      - '.github/workflows/app-ci.yml'
+  workflow_dispatch:
+
+# The default token needs nothing beyond reading the repository here.
+permissions:
+  contents: read
+
+# A new push to the same branch makes an in-flight run redundant.
+concurrency:
+  group: app-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: '1.26.5'
+
+jobs:
+  test:
+    name: Lint and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: app/go.sum
+
+      - name: Verify go.mod is tidy
+        working-directory: app
+        run: |
+          go mod tidy
+          if ! git diff --exit-code -- go.mod go.sum; then
+            echo "::error::go.mod/go.sum are out of date. Run 'make tidy' and commit the result."
+            exit 1
+          fi
+
+      - name: Check formatting
+        run: make fmt-check
+
+      - name: Vet
+        run: make vet
+
+      # Race detection needs cgo, which the hosted runners provide. This is the
+      # main reason tests run here rather than only locally.
+      - name: Test with race detector
+        run: make test-race
+
+      - name: Coverage report
+        working-directory: app
+        run: |
+          go test ./... -count=1 -coverprofile=coverage.out
+          go tool cover -func=coverage.out | tail -1
+
+  image:
+    name: Build and smoke-test image
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build image
+        uses: docker/build-push-action@v7
+        with:
+          context: app
+          push: false
+          load: true
+          tags: hello-world:ci
+          build-args: |
+            VERSION=${{ github.sha }}
+            COMMIT=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke-test the image
+        run: ./scripts/smoke-test.sh hello-world:ci
+
+      - name: Report image size
+        run: docker image inspect hello-world:ci --format 'image size: {{.Size}} bytes'

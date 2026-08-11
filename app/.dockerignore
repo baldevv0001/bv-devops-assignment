@@ -1,0 +1,12 @@
+# Keep the build context to just the Go sources. Anything not listed as an
+# exception below is excluded, so new files default to being kept out.
+*
+
+!go.mod
+!go.sum
+!cmd/
+!internal/
+
+# Tests are not needed to build the binary and only enlarge the context.
+**/*_test.go
+**/testdata/
