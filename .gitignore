@@ -1,0 +1,42 @@
+# Build artefacts
+bin/
+dist/
+*.out
+coverage.html
+
+# Terraform (populated from Part 3 onward)
+**/.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+# tfvars can carry account IDs and other environment detail; the committed
+# examples are the *.tfvars.example files instead.
+*.auto.tfvars
+*.tfvars
+!*.tfvars.example
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+tfplan
+*.tfplan
+
+# Helm
+charts/**/charts/
+*.tgz
+
+# Credentials — never commit these
+.env
+*.pem
+*.key
+kubeconfig
+kubeconfig-*
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
