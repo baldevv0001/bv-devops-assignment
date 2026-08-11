@@ -1,0 +1,73 @@
+{{- if .Values.tests.enabled }}
+{{/*
+Run with `helm test <release>`. This exercises the Service from inside the
+cluster, which covers what a template render cannot: that the selector actually
+matches running pods and that they are Ready and answering.
+
+It checks only the public port. The metrics port is deliberately not tested
+here, because the NetworkPolicy restricts :9090 to the monitoring namespace and
+this pod is not in it — a passing check would mean the policy was not working.
+*/}}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "hello-world.fullname" . }}-test-connection
+  labels:
+    {{- include "hello-world.labels" . | nindent 4 }}
+    app.kubernetes.io/component: test
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: curl
+      image: "{{ .Values.tests.image.repository }}:{{ .Values.tests.image.tag }}"
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop:
+            - ALL
+      command:
+        - /bin/sh
+        - -c
+        - |
+          set -eu
+          BASE="http://{{ include "hello-world.fullname" . }}:{{ .Values.service.port }}"
+
+          echo "GET $BASE/"
+          BODY="$(curl -fsS --max-time 5 "$BASE/")"
+          echo "  -> $BODY"
+          if [ "$BODY" != {{ .Values.config.message | quote }} ]; then
+            echo "FAIL: expected {{ .Values.config.message | quote }}"
+            exit 1
+          fi
+
+          for path in healthz readyz; do
+            echo "GET $BASE/$path"
+            CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$BASE/$path")"
+            echo "  -> $CODE"
+            [ "$CODE" = "200" ] || { echo "FAIL: /$path returned $CODE"; exit 1; }
+          done
+
+          echo "GET $BASE/metrics (expected 404: metrics must not be on the public port)"
+          CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$BASE/metrics")"
+          echo "  -> $CODE"
+          [ "$CODE" = "404" ] || { echo "FAIL: /metrics reachable on the public port"; exit 1; }
+
+          echo "All connection tests passed."
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          memory: 32Mi
+{{- end }}

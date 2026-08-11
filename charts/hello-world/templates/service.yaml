@@ -1,0 +1,68 @@
+{{/*
+The user-facing Service. It carries only the HTTP port: a LoadBalancer Service
+publishes every port it lists, so adding the metrics port here would expose
+/metrics to the internet as soon as service.type is changed.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "hello-world.fullname" . }}
+  labels:
+    {{- include "hello-world.labels" . | nindent 4 }}
+  {{- if or .Values.service.annotations .Values.commonAnnotations }}
+  annotations:
+    {{- with .Values.commonAnnotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.service.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  {{- if and (eq .Values.service.type "LoadBalancer") .Values.service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml .Values.service.loadBalancerSourceRanges | nindent 4 }}
+  {{- end }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP
+      {{- if and (eq .Values.service.type "NodePort") .Values.service.nodePort }}
+      nodePort: {{ .Values.service.nodePort }}
+      {{- end }}
+  selector:
+    {{- include "hello-world.selectorLabels" . | nindent 4 }}
+---
+{{- if .Values.metricsService.enabled }}
+{{/*
+Metrics Service, deliberately always ClusterIP. This is what the ServiceMonitor
+selects, and it is only reachable from inside the cluster.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "hello-world.metricsServiceName" . }}
+  labels:
+    {{- include "hello-world.labels" . | nindent 4 }}
+    app.kubernetes.io/component: metrics
+  {{- if or .Values.metricsService.annotations .Values.commonAnnotations }}
+  annotations:
+    {{- with .Values.commonAnnotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.metricsService.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: metrics
+      port: {{ .Values.metricsService.port }}
+      targetPort: metrics
+      protocol: TCP
+  selector:
+    {{- include "hello-world.selectorLabels" . | nindent 4 }}
+{{- end }}

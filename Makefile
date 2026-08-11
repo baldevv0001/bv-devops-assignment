@@ -105,6 +105,43 @@ docker-run: ## Run the image locally, app on :8080 and metrics on :9090
 docker-smoke: docker-build ## Build the image and assert every endpoint responds
 	@scripts/smoke-test.sh $(IMAGE):$(VERSION)
 
+## --- Helm chart ------------------------------------------------------------
+
+CHART_DIR   ?= charts/hello-world
+KIND_CLUSTER?= hello-world
+KIND_IMAGE  ?= hello-world:ci
+
+.PHONY: helm-lint
+helm-lint: ## Lint the chart against both default and kind values
+	helm lint $(CHART_DIR)
+	helm lint $(CHART_DIR) --values $(CHART_DIR)/ci/kind-values.yaml
+
+.PHONY: helm-template
+helm-template: ## Render the chart with default values
+	helm template hello-world $(CHART_DIR)
+
+.PHONY: helm-package
+helm-package: ## Package the chart into dist/
+	mkdir -p dist
+	helm package $(CHART_DIR) --destination dist
+	@echo "packaged into dist/"
+
+.PHONY: kind-up
+kind-up: ## Create the 3-zone kind cluster and load the app image
+	scripts/kind-up.sh $(KIND_IMAGE)
+
+.PHONY: kind-down
+kind-down: ## Delete the kind cluster
+	kind delete cluster --name $(KIND_CLUSTER)
+
+.PHONY: chart-test
+chart-test: ## Run the full chart test suite against kind
+	scripts/chart-test.sh
+
+.PHONY: chart-test-keep
+chart-test-keep: ## Same, but leave the release installed for inspection
+	scripts/chart-test.sh --keep
+
 .PHONY: clean
 clean: ## Remove build artefacts
-	rm -rf bin coverage.html $(APP_DIR)/coverage.out
+	rm -rf bin dist coverage.html $(APP_DIR)/coverage.out

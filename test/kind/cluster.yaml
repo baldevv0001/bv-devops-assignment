@@ -1,0 +1,40 @@
+# A three-worker kind cluster whose nodes carry fake availability-zone labels.
+#
+# The zone labels are the point of this file. Without them there is only one
+# topology domain, the zone spread constraint is trivially satisfied, and the
+# HA behaviour the chart claims cannot actually be observed locally. With them,
+# a local cluster reproduces the scheduling decisions EKS would make across
+# three real AZs.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: hello-world
+
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraPortMappings:
+      # Exposes a NodePort range on the host so the service can be reached
+      # from WSL without a port-forward.
+      - containerPort: 30080
+        hostPort: 30080
+        protocol: TCP
+
+  - role: worker
+    labels:
+      topology.kubernetes.io/region: ap-south-1
+      topology.kubernetes.io/zone: ap-south-1a
+
+  - role: worker
+    labels:
+      topology.kubernetes.io/region: ap-south-1
+      topology.kubernetes.io/zone: ap-south-1b
+
+  - role: worker
+    labels:
+      topology.kubernetes.io/region: ap-south-1
+      topology.kubernetes.io/zone: ap-south-1c

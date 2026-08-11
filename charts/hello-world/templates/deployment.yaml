@@ -1,0 +1,181 @@
+{{- include "hello-world.validateValues" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "hello-world.fullname" . }}
+  labels:
+    {{- include "hello-world.labels" . | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: 5
+  strategy:
+    {{- toYaml .Values.updateStrategy | nindent 4 }}
+  selector:
+    matchLabels:
+      {{- include "hello-world.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "hello-world.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{/*
+        Values are quoted rather than passed through toYaml, because
+        annotation values must be strings. A rollout-triggering timestamp
+        (--set podAnnotations.rollout=$(date +%s)) is the common way to hit
+        this, and unquoted it fails the upgrade with an opaque unmarshal error.
+        */}}
+        {{- range $key, $value := . }}
+        {{ $key }}: {{ $value | quote }}
+        {{- end }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "hello-world.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.automountServiceAccountToken }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      # Must exceed drainDelay + shutdownTimeout, or the kubelet sends SIGKILL
+      # while the process is still draining connections.
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: {{ include "hello-world.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "8080"
+            - name: ADMIN_PORT
+              value: "9090"
+            - name: MESSAGE
+              value: {{ .Values.config.message | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.config.logLevel | quote }}
+            - name: DRAIN_DELAY
+              value: {{ .Values.config.drainDelay | quote }}
+            - name: SHUTDOWN_TIMEOUT
+              value: {{ .Values.config.shutdownTimeout | quote }}
+            # Surfaced for logs and for correlating metrics back to a pod.
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if .Values.probes.startup.enabled }}
+          # Liveness is suspended until the startup probe succeeds, so a slow
+          # start can never be misread as a hang and restarted in a loop.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          {{- end }}
+          {{- if .Values.probes.liveness.enabled }}
+          # Liveness asks only "is this process still working"; it must not
+          # depend on downstreams, or a dependency outage restarts every pod.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          {{- end }}
+          {{- if .Values.probes.readiness.enabled }}
+          # Readiness gates Service endpoints and returns 503 during the drain.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+            successThreshold: {{ .Values.probes.readiness.successThreshold }}
+          {{- end }}
+          # No preStop hook. The usual "preStop: sleep 5" trick exists to hold a
+          # pod open while endpoint removal propagates, but it needs a shell the
+          # distroless image does not have. The application performs that drain
+          # itself on SIGTERM, which is both more precise and observable in logs.
+          resources:
+            requests:
+              {{- toYaml .Values.resources.requests | nindent 14 }}
+            limits:
+              {{- if .Values.resources.limits.cpu }}
+              cpu: {{ .Values.resources.limits.cpu }}
+              {{- end }}
+              {{- if .Values.resources.limits.memory }}
+              memory: {{ .Values.resources.limits.memory }}
+              {{- end }}
+      {{- if .Values.topologySpread.enabled }}
+      topologySpreadConstraints:
+        # Spread across availability zones first. This is what makes losing an
+        # AZ a partial capacity loss rather than a full outage.
+        - maxSkew: {{ .Values.topologySpread.zone.maxSkew }}
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: {{ .Values.topologySpread.zone.whenUnsatisfiable }}
+          # Scope the calculation to the current ReplicaSet, so pods from the
+          # outgoing revision during a rolling update do not count as skew and
+          # deadlock the rollout.
+          matchLabelKeys:
+            - pod-template-hash
+          labelSelector:
+            matchLabels:
+              {{- include "hello-world.selectorLabels" . | nindent 14 }}
+        # Then spread across nodes within a zone, so a single node failure
+        # cannot take out more than one replica.
+        - maxSkew: {{ .Values.topologySpread.node.maxSkew }}
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: {{ .Values.topologySpread.node.whenUnsatisfiable }}
+          matchLabelKeys:
+            - pod-template-hash
+          labelSelector:
+            matchLabels:
+              {{- include "hello-world.selectorLabels" . | nindent 14 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

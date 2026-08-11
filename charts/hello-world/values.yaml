@@ -1,0 +1,263 @@
+# Default values for the hello-world chart.
+# Defaults are production-shaped: three replicas spread across zones, a
+# disruption budget, a restrictive NetworkPolicy and a hardened pod. Values
+# used for local testing live in ci/kind-values.yaml.
+
+# -- Number of replicas. Ignored when autoscaling.enabled is true, since the
+# HPA then owns spec.replicas. Three is the smallest count that survives losing
+# an availability zone while still leaving two serving replicas.
+replicaCount: 3
+
+image:
+  # -- Registry host. Set to "" for images already present on the node, which
+  # is how the kind test loads a locally built image.
+  registry: docker.io
+  repository: baldevv0001/hello-world
+  # -- Image tag. Defaults to .Chart.AppVersion when empty.
+  tag: ""
+  # -- Image digest (sha256:...). Takes precedence over tag when set. Deploying
+  # by digest is what makes a release actually immutable: a tag can be moved to
+  # point at different content after the fact, a digest cannot.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+# -- Secrets for pulling from a private registry, e.g. [{name: regcred}].
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# -- Labels added to every rendered object.
+commonLabels: {}
+# -- Annotations added to every rendered object.
+commonAnnotations: {}
+
+# Application configuration, rendered into the container's environment.
+config:
+  # -- Body returned by GET /.
+  message: "Hello World"
+  # -- One of debug, info, warn, error.
+  logLevel: info
+  # -- How long the pod serves traffic while reporting NotReady after SIGTERM.
+  # Must be long enough for every node's kube-proxy to observe the EndpointSlice
+  # update, or in-flight connections get refused during a rolling update.
+  drainDelay: 5s
+  # -- Budget for finishing in-flight requests after the drain window.
+  shutdownTimeout: 15s
+
+# -- Additional environment variables, in normal container env format.
+extraEnv: []
+#  - name: EXTRA_SETTING
+#    value: "value"
+#  - name: FROM_SECRET
+#    valueFrom:
+#      secretKeyRef: {name: my-secret, key: my-key}
+
+serviceAccount:
+  create: true
+  # -- Name of the ServiceAccount. Generated from the release name when empty.
+  name: ""
+  # -- Annotations, e.g. eks.amazonaws.com/role-arn for IRSA.
+  annotations: {}
+
+# -- Mount the ServiceAccount token into the pod. This application never calls
+# the Kubernetes API, so the token is omitted: a token that is not present
+# cannot be stolen and replayed against the API server.
+automountServiceAccountToken: false
+
+service:
+  # -- ClusterIP, NodePort or LoadBalancer. EKS provisions an NLB for
+  # LoadBalancer when the AWS Load Balancer Controller is installed.
+  type: ClusterIP
+  port: 80
+  annotations: {}
+  # -- Fixed node port, only used when type is NodePort. Leave empty to let the
+  # API server allocate one from the service-node-port-range.
+  nodePort: ""
+  # -- Source ranges permitted to reach a LoadBalancer service. Empty means
+  # AWS defaults to 0.0.0.0/0.
+  loadBalancerSourceRanges: []
+
+# Metrics are published through a second, always-ClusterIP Service rather than
+# a second port on the main one. A LoadBalancer Service publishes every port it
+# lists, so putting :9090 on the main Service would expose the metrics endpoint
+# to the internet the moment service.type became LoadBalancer.
+metricsService:
+  enabled: true
+  port: 9090
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: hello-world.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    # -- CPU limits are intentionally unset. A CPU limit is enforced by CFS
+    # quota, which throttles the process for the rest of each 100ms period once
+    # the quota is spent — that shows up as latency spikes even when the node
+    # has idle CPU. The requests value already guarantees a share and protects
+    # neighbours. Set this only where a hard cap is genuinely required.
+    cpu: ""
+    # -- Memory limits ARE set: memory is incompressible, so without a limit a
+    # leaking pod can push the whole node into OOM rather than just itself.
+    memory: 128Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  # -- Set to a number to also scale on memory. Usually a poor scaling signal
+  # for a Go service, since the runtime holds freed memory rather than
+  # returning it promptly to the OS.
+  targetMemoryUtilizationPercentage: ""
+  behavior:
+    scaleDown:
+      # -- Scale down slowly. Reacting quickly to a dip only causes the next
+      # traffic bump to be served by a cold, undersized deployment.
+      stabilizationWindowSeconds: 300
+    scaleUp:
+      stabilizationWindowSeconds: 30
+
+podDisruptionBudget:
+  enabled: true
+  # -- Keeps two replicas serving during voluntary disruption such as a node
+  # drain or cluster upgrade. Set only one of minAvailable / maxUnavailable.
+  minAvailable: 2
+  maxUnavailable: ""
+
+# Spread rules. Zone spreading is the constraint that delivers real
+# multi-AZ availability; host spreading protects against a single node failure
+# inside one zone.
+topologySpread:
+  enabled: true
+  zone:
+    # -- DoNotSchedule makes the zone spread a hard requirement: rather than
+    # silently stacking replicas into one AZ under pressure, the pod stays
+    # Pending and the reason is visible in kubectl describe.
+    whenUnsatisfiable: DoNotSchedule
+    maxSkew: 1
+  node:
+    # -- ScheduleAnyway: preferring one pod per node is worth having, but not
+    # at the cost of refusing to schedule on a small cluster.
+    whenUnsatisfiable: ScheduleAnyway
+    maxSkew: 1
+
+# Zero-downtime rolling update. maxUnavailable 0 means a new pod must be Ready
+# before an old one is removed, so capacity never dips below replicaCount.
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
+
+# -- Must exceed config.drainDelay + config.shutdownTimeout, otherwise the
+# kubelet SIGKILLs the container part-way through its drain.
+terminationGracePeriodSeconds: 30
+
+networkPolicy:
+  enabled: true
+  # -- Allow HTTP from anywhere. Traffic arriving via a cloud load balancer has
+  # no stable pod or namespace identity to match on, so restricting it here
+  # would break ingress. Narrow it with service.loadBalancerSourceRanges, or
+  # set this false and list explicit peers in httpFrom.
+  allowAllHTTPIngress: true
+  # -- Additional peers permitted to reach the HTTP port, in NetworkPolicy
+  # "from" format. Used when allowAllHTTPIngress is false.
+  httpFrom: []
+  # -- Namespaces permitted to scrape the metrics port. Prometheus is the only
+  # thing that should ever reach :9090.
+  metricsFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
+  # -- Egress is restricted to DNS only, because this service makes no outbound
+  # calls. If it is ever compromised it cannot reach the metadata endpoint,
+  # other pods, or the internet.
+  restrictEgress: true
+  # -- Extra egress rules appended when restrictEgress is true.
+  extraEgress: []
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  # -- The image ships a static binary and writes nothing to disk, so the root
+  # filesystem can be read-only with no scratch volume needed.
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  capabilities:
+    drop:
+      - ALL
+  seccompProfile:
+    type: RuntimeDefault
+
+# Probe tuning. All three hit the public port; /healthz reports process health
+# and /readyz reports whether this pod should receive traffic.
+probes:
+  startup:
+    enabled: true
+    # -- 30 x 1s gives a slow start plenty of room while still letting a truly
+    # broken pod be restarted quickly. Liveness does not run until this passes.
+    periodSeconds: 1
+    failureThreshold: 30
+  liveness:
+    enabled: true
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 3
+  readiness:
+    enabled: true
+    periodSeconds: 5
+    timeoutSeconds: 2
+    # -- Two consecutive failures removes the pod from endpoints. Low on
+    # purpose: shedding a bad pod fast matters more than tolerating a blip.
+    failureThreshold: 2
+    successThreshold: 1
+
+# ServiceMonitor for the prometheus-operator. Disabled by default so the chart
+# installs cleanly on a cluster without the operator CRDs present.
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
+  # -- Extra labels. Some kube-prometheus-stack installations require a
+  # release label here for the operator to select the ServiceMonitor.
+  labels: {}
+  relabelings: []
+  metricRelabelings: []
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+# -- Extra affinity rules, merged alongside the generated topology spread
+# constraints rather than replacing them.
+affinity: {}
+priorityClassName: ""
+
+# Configuration for `helm test`.
+tests:
+  enabled: true
+  image:
+    repository: curlimages/curl
+    tag: "8.19.0"

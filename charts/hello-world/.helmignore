@@ -1,0 +1,14 @@
+.DS_Store
+.git/
+.gitignore
+.idea/
+.vscode/
+*.swp
+*.bak
+*.tmp
+*.orig
+*~
+# Test fixtures and CI config are not part of the packaged chart.
+ci/
+tests/
+*.tgz
