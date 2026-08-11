@@ -1,0 +1,111 @@
+# Continuous integration for the Helm chart.
+#
+# Lints and renders the chart, then installs it on a three-zone kind cluster
+# and asserts the properties it claims to provide. Like app-ci this never
+# publishes and needs no secrets.
+name: chart-ci
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'charts/**'
+      - 'test/kind/**'
+      - 'scripts/kind-up.sh'
+      - 'scripts/chart-test.sh'
+      - 'app/**'
+      - '.github/workflows/chart-ci.yml'
+  pull_request:
+    paths:
+      - 'charts/**'
+      - 'test/kind/**'
+      - 'scripts/kind-up.sh'
+      - 'scripts/chart-test.sh'
+      - 'app/**'
+      - '.github/workflows/chart-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chart-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint and render
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: azure/setup-helm@v5
+        with:
+          version: v3.20.0
+
+      - name: Lint
+        run: make helm-lint
+
+      - name: Render with default values
+        run: helm template hello-world charts/hello-world > /dev/null
+
+      - name: Render with LoadBalancer and ingress enabled
+        run: |
+          helm template hello-world charts/hello-world \
+            --set service.type=LoadBalancer \
+            --set ingress.enabled=true \
+            --set serviceMonitor.enabled=true > /dev/null
+
+      # The chart refuses configurations that render valid YAML but misbehave
+      # at runtime. If these ever stop failing, the guards have regressed.
+      - name: Guards reject invalid configurations
+        run: |
+          set -eu
+          expect_failure() {
+            if helm template hello-world charts/hello-world "$@" >/dev/null 2>&1; then
+              echo "::error::expected 'helm template $*' to fail, but it succeeded"
+              exit 1
+            fi
+            echo "correctly rejected: $*"
+          }
+          expect_failure --set config.drainDelay=5
+          expect_failure --set podDisruptionBudget.minAvailable=3
+          expect_failure --set podDisruptionBudget.maxUnavailable=1
+          expect_failure --set-string replicaCount=three
+          expect_failure --set image.digest=notadigest
+
+  install:
+    name: Install on kind and verify HA
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: azure/setup-helm@v5
+        with:
+          version: v3.20.0
+
+      # The cluster config carries the fake zone labels that make the topology
+      # spread assertions meaningful.
+      - name: Create 3-zone kind cluster
+        uses: helm/kind-action@v1
+        with:
+          config: test/kind/cluster.yaml
+          cluster_name: hello-world
+          wait: 120s
+
+      - name: Build and load the application image
+        run: |
+          docker build --build-arg VERSION=ci --build-arg COMMIT="${GITHUB_SHA::7}" \
+            -t hello-world:ci app
+          kind load docker-image hello-world:ci --name hello-world
+
+      - name: Run the chart test suite
+        run: ./scripts/chart-test.sh
+
+      - name: Dump diagnostics on failure
+        if: failure()
+        run: |
+          kubectl get pods -A -o wide || true
+          kubectl describe pods -n hello-world || true
+          kubectl logs -n hello-world -l app.kubernetes.io/instance=hw --tail=50 || true

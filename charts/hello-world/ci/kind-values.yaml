@@ -1,0 +1,35 @@
+# Values used when testing the chart on a local kind cluster.
+#
+# Only the things that genuinely cannot work locally are overridden. Everything
+# that the HA and security claims rest on — replica count, topology spread, the
+# PDB, the pod security context, the NetworkPolicy — is left at its production
+# default, so the local run exercises the real configuration.
+
+image:
+  # Empty registry plus a locally loaded image: `kind load docker-image` places
+  # hello-world:ci on each node, so nothing is pulled from Docker Hub.
+  registry: ""
+  repository: hello-world
+  tag: "ci"
+  pullPolicy: IfNotPresent
+
+# kind has no metrics-server by default, so an HPA would have no metrics to act
+# on and the Deployment would sit at one replica. Pinning replicas keeps the
+# spread and disruption tests deterministic. The HPA path is covered separately
+# by the template-render assertions.
+autoscaling:
+  enabled: false
+replicaCount: 3
+
+# Speeds up the rolling-update test without changing its meaning.
+config:
+  drainDelay: 2s
+  shutdownTimeout: 5s
+terminationGracePeriodSeconds: 15
+
+# Reachable from the host through the port mapping in test/kind/cluster.yaml.
+service:
+  type: NodePort
+  port: 80
+  # Matches the extraPortMapping in test/kind/cluster.yaml.
+  nodePort: 30080

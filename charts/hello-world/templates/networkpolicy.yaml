@@ -1,0 +1,77 @@
+{{- if .Values.networkPolicy.enabled }}
+{{/*
+A NetworkPolicy is allow-list only: naming a pod in one at all switches it to
+default-deny for the listed policyTypes. Both Ingress and Egress are listed
+here, so anything not explicitly permitted below is dropped.
+
+Requires a CNI that enforces NetworkPolicy. Amazon VPC CNI, Calico and recent
+kindnet all do — enforcement of the metrics rule below is verified on kind in
+scripts/chart-test.sh, from both an allowed and a denied namespace.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "hello-world.fullname" . }}
+  labels:
+    {{- include "hello-world.labels" . | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "hello-world.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    {{- if .Values.networkPolicy.restrictEgress }}
+    - Egress
+    {{- end }}
+  ingress:
+    # HTTP. Packets arriving through a cloud load balancer carry no pod or
+    # namespace identity to match on, so restricting the source here would
+    # break external ingress entirely. Narrow the exposure at the load
+    # balancer with service.loadBalancerSourceRanges instead.
+    {{- if .Values.networkPolicy.allowAllHTTPIngress }}
+    - ports:
+        - port: http
+          protocol: TCP
+    {{- else }}
+    - from:
+        {{- toYaml .Values.networkPolicy.httpFrom | nindent 8 }}
+      ports:
+        - port: http
+          protocol: TCP
+    {{- end }}
+    # Metrics. Only the monitoring namespace may reach :9090, so the endpoint
+    # is unreachable from other workloads even though it listens on every
+    # interface inside the pod.
+    {{- with .Values.networkPolicy.metricsFrom }}
+    - from:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - port: metrics
+          protocol: TCP
+    {{- end }}
+  {{- if .Values.networkPolicy.restrictEgress }}
+  egress:
+    # DNS to kube-dns is the only outbound traffic this service needs. Denying
+    # everything else means a compromised pod cannot reach the EC2 metadata
+    # endpoint, the Kubernetes API, other namespaces, or the internet.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    {{- with .Values.networkPolicy.extraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
+{{- end }}

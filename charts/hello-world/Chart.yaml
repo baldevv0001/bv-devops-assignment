@@ -1,0 +1,26 @@
+apiVersion: v2
+name: hello-world
+description: A highly available Hello World microservice with Prometheus instrumentation
+type: application
+
+# version is the chart's own version and changes whenever the templates change.
+# appVersion tracks the container image and doubles as the default image tag.
+version: 0.1.0
+appVersion: "0.1.0"
+
+# Requires 1.27+: the chart uses autoscaling/v2, policy/v1 PodDisruptionBudget,
+# and matchLabelKeys on topology spread constraints.
+kubeVersion: ">=1.27.0-0"
+
+keywords:
+  - hello-world
+  - microservice
+  - high-availability
+
+home: https://github.com/baldevv0001/bv-devops-assignment
+sources:
+  - https://github.com/baldevv0001/bv-devops-assignment
+
+maintainers:
+  - name: Baldev Verma
+    url: https://github.com/baldevv0001
