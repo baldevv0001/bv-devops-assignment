@@ -9,8 +9,6 @@ data "aws_availability_zones" "available" {
   }
 }
 
-data "aws_caller_identity" "current" {}
-
 locals {
   name = "${var.project}-${var.environment}"
 

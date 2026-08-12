@@ -28,7 +28,7 @@ module "ebs_csi_pod_identity" {
 
   # Scope the KMS grant to the key that actually encrypts the volumes, rather
   # than letting the driver use any key in the account.
-  aws_ebs_csi_kms_arns = [aws_kms_key.ebs.arn]
+  aws_ebs_csi_kms_arns = [aws_kms_key.ebs[0].arn]
 
   # The association is declared on the addon in eks.tf, because the addon must
   # exist before its service account can be bound to a role.
@@ -39,7 +39,25 @@ module "ebs_csi_pod_identity" {
 
 # A dedicated key for EBS volume encryption, separate from the cluster secrets
 # key the EKS module creates, so the two can be rotated independently.
+#
+# This key encrypts PersistentVolumes created by the EBS CSI driver, which are
+# referenced by the gp3 StorageClass. Node root volumes are a separate matter:
+# they set encrypted = true with no key, so they use the AWS-managed aws/ebs
+# key rather than this one.
+#
+# No aws_kms_key_policy is attached, deliberately. The default key policy
+# already delegates to IAM for principals in this account, which is what lets
+# the CSI driver's role use the key via aws_ebs_csi_kms_arns above. Writing an
+# explicit policy here would add two problems and solve none: a malformed
+# policy can lock the key out of its own account, and granting the autoscaling
+# service-linked role — the usual reflex — fails outright with
+# "MalformedPolicyDocument: invalid principals" in any account that has never
+# used Auto Scaling, because the role does not exist until first use.
 resource "aws_kms_key" "ebs" {
+  # Tied to the driver that uses it: with no CSI driver there are no
+  # PersistentVolumes to encrypt, and an orphaned CMK still bills monthly.
+  count = var.enable_ebs_csi_driver ? 1 : 0
+
   description             = "${local.name} EBS volume encryption"
   deletion_window_in_days = 7
   enable_key_rotation     = true
@@ -50,53 +68,8 @@ resource "aws_kms_key" "ebs" {
 }
 
 resource "aws_kms_alias" "ebs" {
+  count = var.enable_ebs_csi_driver ? 1 : 0
+
   name          = "alias/${local.name}-ebs"
-  target_key_id = aws_kms_key.ebs.key_id
-}
-
-data "aws_iam_policy_document" "ebs_key" {
-  # Lets IAM policies in this account grant use of the key. Without a statement
-  # allowing the account root, the key can only ever be used by principals
-  # named explicitly in this policy, and the CSI driver's IAM permissions would
-  # have no effect.
-  statement {
-    sid       = "AllowAccountAdministration"
-    effect    = "Allow"
-    actions   = ["kms:*"]
-    resources = ["*"]
-
-    principals {
-      type        = "AWS"
-      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
-    }
-  }
-
-  # EBS volumes attached by an Auto Scaling group are encrypted through the
-  # autoscaling service-linked role. Omitting this grant makes node launches
-  # fail with an access-denied that points nowhere useful.
-  statement {
-    sid    = "AllowServiceLinkedRoleUse"
-    effect = "Allow"
-    actions = [
-      "kms:Encrypt",
-      "kms:Decrypt",
-      "kms:ReEncrypt*",
-      "kms:GenerateDataKey*",
-      "kms:DescribeKey",
-      "kms:CreateGrant",
-    ]
-    resources = ["*"]
-
-    principals {
-      type = "AWS"
-      identifiers = [
-        "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling",
-      ]
-    }
-  }
-}
-
-resource "aws_kms_key_policy" "ebs" {
-  key_id = aws_kms_key.ebs.id
-  policy = data.aws_iam_policy_document.ebs_key.json
+  target_key_id = aws_kms_key.ebs[0].key_id
 }

@@ -70,8 +70,10 @@ need no AWS credentials and create nothing:
 cd terraform/eks && terraform test
 ```
 
-Twelve cases: two that assert a valid configuration plans and derives the right
-topology, and ten that assert specific misconfigurations are rejected. The
+Thirteen cases: three that assert valid configurations plan and derive the
+right topology — including the path where the optional addons are disabled,
+which is the only thing that exercises the `[0]` indexes into the Pod Identity
+module — and ten that assert specific misconfigurations are rejected. The
 mocking is more elaborate than it looks — `aws_iam_policy_document`,
 `aws_partition` and `aws_iam_session_context` all need realistic defaults,
 because the generated placeholders are not valid JSON or valid ARNs and the

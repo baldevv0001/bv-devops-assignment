@@ -61,8 +61,8 @@ output "nat_gateway_count" {
 # ---------------------------------------------------------------------------
 
 output "ebs_kms_key_arn" {
-  description = "KMS key for EBS volume encryption. Referenced by the gp3 StorageClass applied after the cluster is up."
-  value       = try(aws_kms_key.ebs.arn, null)
+  description = "KMS key for EBS volume encryption. Referenced by the gp3 StorageClass applied after the cluster is up. Null when the EBS CSI driver is disabled."
+  value       = one(aws_kms_key.ebs[*].arn)
 }
 
 output "cluster_security_group_id" {

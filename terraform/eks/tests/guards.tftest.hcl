@@ -115,6 +115,24 @@ run "valid_configuration_plans_and_derives_expected_topology" {
   }
 }
 
+# The optional addons are guarded by count/conditional expressions that index
+# into module.ebs_csi_pod_identity[0]. Nothing exercises those indexes unless a
+# test turns the addons off, so this run is what proves the disabled path is
+# not a latent "index out of range" at apply time.
+run "plans_with_optional_addons_disabled" {
+  command = plan
+
+  variables {
+    enable_ebs_csi_driver = false
+    enable_metrics_server = false
+  }
+
+  assert {
+    condition     = output.ebs_kms_key_arn == null
+    error_message = "No EBS KMS key should be created when the CSI driver is disabled — an orphaned CMK still bills monthly."
+  }
+}
+
 run "one_nat_gateway_per_zone_when_not_cost_optimised" {
   command = plan
 
