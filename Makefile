@@ -142,6 +142,51 @@ chart-test: ## Run the full chart test suite against kind
 chart-test-keep: ## Same, but leave the release installed for inspection
 	scripts/chart-test.sh --keep
 
+## --- Terraform --------------------------------------------------------------
+
+TF_DIR   ?= terraform/eks
+TF_VARS  ?= environments/dev.tfvars
+
+.PHONY: tf-fmt
+tf-fmt: ## Format all Terraform
+	terraform fmt -recursive terraform
+
+.PHONY: tf-fmt-check
+tf-fmt-check: ## Fail if any Terraform is unformatted
+	terraform fmt -recursive -check -diff terraform
+
+.PHONY: tf-init
+tf-init: ## Initialise the EKS configuration
+	cd $(TF_DIR) && terraform init
+
+.PHONY: tf-validate
+tf-validate: ## Validate both Terraform configurations
+	cd $(TF_DIR) && terraform init -backend=false -input=false >/dev/null && terraform validate
+	cd terraform/bootstrap && terraform init -backend=false -input=false >/dev/null && terraform validate
+
+.PHONY: tf-test
+tf-test: ## Run the Terraform guard tests (mocked, no AWS credentials needed)
+	cd $(TF_DIR) && terraform test
+
+.PHONY: tf-plan
+tf-plan: ## Plan the EKS cluster (needs AWS credentials)
+	cd $(TF_DIR) && terraform plan -var-file=$(TF_VARS)
+
+.PHONY: tf-apply
+tf-apply: ## Create the EKS cluster (COSTS MONEY, ~Rs 30/hour)
+	cd $(TF_DIR) && terraform apply -var-file=$(TF_VARS)
+
+.PHONY: tf-destroy
+tf-destroy: ## Destroy the EKS cluster
+	cd $(TF_DIR) && terraform destroy -var-file=$(TF_VARS)
+
+.PHONY: tf-check
+tf-check: tf-fmt-check tf-validate tf-test ## All Terraform checks that need no AWS credentials
+
+.PHONY: kubeconfig
+kubeconfig: ## Point kubectl at the provisioned cluster
+	cd $(TF_DIR) && $$(terraform output -raw configure_kubectl)
+
 .PHONY: clean
 clean: ## Remove build artefacts
 	rm -rf bin dist coverage.html $(APP_DIR)/coverage.out

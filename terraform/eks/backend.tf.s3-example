@@ -1,0 +1,23 @@
+# Remote state in S3. Not active by default — this project uses local state so
+# it can be run end to end without provisioning anything first.
+#
+# To enable:
+#   1. cd ../bootstrap && terraform init && terraform apply
+#      (note the state_bucket_name output)
+#   2. mv backend.tf.s3-example backend.tf
+#   3. replace REPLACE_WITH_BUCKET_NAME below
+#   4. terraform init -migrate-state
+#
+# use_lockfile enables S3-native state locking, added in Terraform 1.10. It
+# replaces the DynamoDB table that older guides tell you to create, removing a
+# resource and its cost.
+
+terraform {
+  backend "s3" {
+    bucket       = "REPLACE_WITH_BUCKET_NAME"
+    key          = "eks/terraform.tfstate"
+    region       = "ap-south-1"
+    encrypt      = true
+    use_lockfile = true
+  }
+}
