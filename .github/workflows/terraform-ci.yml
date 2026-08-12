@@ -1,0 +1,92 @@
+# Continuous integration for the Terraform configurations.
+#
+# Everything here runs without AWS credentials and creates nothing: format
+# check, validate, the mocked guard tests, and a static security scan. Plans
+# against a real account belong in a workflow with an OIDC role, not here.
+name: terraform-ci
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'terraform/**'
+      - '.github/workflows/terraform-ci.yml'
+  pull_request:
+    paths:
+      - 'terraform/**'
+      - '.github/workflows/terraform-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TF_VERSION: '1.15.8'
+  # Keeps Terraform from prompting or colourising in logs.
+  TF_IN_AUTOMATION: 'true'
+
+jobs:
+  validate:
+    name: Format, validate and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Format check
+        run: terraform fmt -recursive -check -diff terraform
+
+      - name: Validate eks
+        working-directory: terraform/eks
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+
+      - name: Validate bootstrap
+        working-directory: terraform/bootstrap
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+
+      # Uses mock_provider, so no credentials and nothing created. Twelve cases
+      # covering the happy path and every guard rail.
+      - name: Guard tests
+        working-directory: terraform/eks
+        run: terraform test
+
+      - name: Lock files are committed
+        run: |
+          for d in terraform/eks terraform/bootstrap; do
+            if [ ! -f "$d/.terraform.lock.hcl" ]; then
+              echo "::error::$d/.terraform.lock.hcl is missing. Commit it so provider versions are reproducible."
+              exit 1
+            fi
+          done
+          echo "provider lock files present"
+
+  scan:
+    name: Static security scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Reports misconfigurations rather than gating the build. Several
+      # findings here are deliberate trade-offs documented in terraform/README,
+      # so failing on them would mean either weakening the docs or adding
+      # ignore comments that hide real findings later.
+      - name: Trivy config scan
+        uses: aquasecurity/trivy-action@0.36.0
+        with:
+          scan-type: config
+          scan-ref: terraform
+          format: table
+          exit-code: '0'
+          severity: HIGH,CRITICAL
