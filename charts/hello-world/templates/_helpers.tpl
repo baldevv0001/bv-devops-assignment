@@ -84,6 +84,20 @@ Name of the metrics Service.
 {{- end }}
 
 {{/*
+Fully-qualified DNS name of the main Service, with a trailing dot.
+
+The trailing dot makes the name absolute, so the resolver looks it up once and
+skips the search list entirely. Without it a short name is tried against each
+search domain and then, on some resolvers, as a bare absolute name — a query
+that leaves the cluster and stalls for the full DNS timeout wherever the
+upstream resolver is unreachable, which is the normal situation for a local
+kind cluster behind WSL.
+*/}}
+{{- define "hello-world.serviceFQDN" -}}
+{{- printf "%s.%s.svc.%s." (include "hello-world.fullname" .) .Release.Namespace .Values.clusterDomain }}
+{{- end }}
+
+{{/*
 Guard against configurations that render valid YAML but misbehave at runtime.
 Failing at template time turns a silent production problem into an install
 error with an explanation.

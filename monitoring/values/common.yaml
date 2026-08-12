@@ -1,0 +1,128 @@
+# Values shared by every environment for kube-prometheus-stack.
+#
+# The stack brings cluster monitoring with it: node-exporter for node metrics,
+# kube-state-metrics for object state, scrape configs for the control plane
+# components, and a large set of default alert rules. Only the parts that need
+# an opinion are set here; everything else is left at the chart's defaults.
+
+fullnameOverride: kube-prometheus-stack
+
+# --- Prometheus -------------------------------------------------------------
+prometheus:
+  prometheusSpec:
+    # By default the operator only selects ServiceMonitors carrying the release
+    # label of this Helm release. That surprises people constantly: a
+    # ServiceMonitor is created, looks correct, and is simply never scraped.
+    # Selecting everything in the cluster is the right call here because the
+    # application chart is a separate release and should not have to know the
+    # name of the monitoring release to be discovered.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    probeSelectorNilUsesHelmValues: false
+    scrapeConfigSelectorNilUsesHelmValues: false
+
+    scrapeInterval: 30s
+    evaluationInterval: 30s
+
+    # Every scraped series gets these labels, so metrics from two clusters
+    # remain distinguishable if they ever land in the same store.
+    externalLabels:
+      cluster: hello-world
+
+    # Restricted pod security, matching the posture of the application chart.
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 1000
+      runAsGroup: 2000
+      fsGroup: 2000
+      seccompProfile:
+        type: RuntimeDefault
+
+# --- Alertmanager -----------------------------------------------------------
+alertmanager:
+  alertmanagerSpec:
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 1000
+      runAsGroup: 2000
+      fsGroup: 2000
+      seccompProfile:
+        type: RuntimeDefault
+
+  config:
+    global:
+      resolve_timeout: 5m
+    route:
+      group_by: ['alertname', 'namespace']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 12h
+      receiver: 'null'
+      routes:
+        # Watchdog fires constantly by design — it is how you tell that the
+        # alerting pipeline itself is alive. Routing it to a black hole keeps
+        # it out of the way while leaving it queryable.
+        - matchers: [alertname = "Watchdog"]
+          receiver: 'null'
+        - matchers: [severity = "critical"]
+          receiver: 'critical'
+    receivers:
+      - name: 'null'
+      - name: 'critical'
+        # Deliberately empty. Wiring Slack or PagerDuty here needs a webhook
+        # URL, which is a secret and does not belong in a repository. See
+        # monitoring/README.md for how to attach one.
+    templates:
+      - '/etc/alertmanager/config/*.tmpl'
+
+# --- Grafana ----------------------------------------------------------------
+grafana:
+  defaultDashboardsEnabled: true
+  defaultDashboardsTimezone: browser
+
+  # The sidecar watches for ConfigMaps with this label and loads their contents
+  # as dashboards. The application chart ships its dashboard that way, so no
+  # Grafana credentials or API calls are involved.
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: ALL
+      folderAnnotation: k8s-sidecar-target-directory
+      provider:
+        foldersFromFilesStructure: true
+    datasources:
+      enabled: true
+
+  grafana.ini:
+    analytics:
+      reporting_enabled: false
+      check_for_updates: false
+    users:
+      # This deployment has no user management and no TLS; anonymous sign-up
+      # would be an open door.
+      allow_sign_up: false
+    auth.anonymous:
+      enabled: false
+
+# --- Cluster component scraping ---------------------------------------------
+# EKS runs the control plane on AWS-managed nodes that are not reachable for
+# scraping, so these targets can never come up there. They are turned off in
+# the EKS values file rather than here, so the kind run still exercises them.
+kubeApiServer:
+  enabled: true
+kubeControllerManager:
+  enabled: true
+kubeScheduler:
+  enabled: true
+kubeProxy:
+  enabled: true
+kubeEtcd:
+  enabled: true
+
+kubeStateMetrics:
+  enabled: true
+nodeExporter:
+  enabled: true

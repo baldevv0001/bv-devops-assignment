@@ -27,6 +27,13 @@ imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
+# -- Cluster DNS domain. Used to build fully-qualified service names, which
+# matters more than it looks: a short name is expanded through the search list
+# in resolv.conf, and once those are exhausted the resolver queries the bare
+# name as absolute. That query gets forwarded upstream and, on a cluster whose
+# upstream resolver is unreachable, hangs until it times out.
+clusterDomain: cluster.local
+
 # -- Labels added to every rendered object.
 commonLabels: {}
 # -- Annotations added to every rendered object.
@@ -245,6 +252,31 @@ serviceMonitor:
   labels: {}
   relabelings: []
   metricRelabelings: []
+
+# Alerting rules, shipped with the chart so a rule always matches the version
+# of the application it was written for. Also needs the operator CRDs.
+prometheusRule:
+  enabled: false
+  labels: {}
+  # -- Fraction of 5xx responses that triggers the error-rate alert.
+  errorRateThreshold: 0.05
+  # -- p99 latency in seconds that triggers the latency alert. This service
+  # normally answers in well under a millisecond, so 0.5s is generous.
+  latencyP99Seconds: 0.5
+  # -- Minimum number of distinct nodes replicas should occupy before the
+  # spread alert fires. Should match the cluster's zone count.
+  minZones: 3
+
+# Grafana dashboard, delivered as a ConfigMap picked up by the sidecar that
+# kube-prometheus-stack runs. Needs no Grafana API calls and no credentials.
+grafanaDashboard:
+  enabled: false
+  # -- Label the Grafana sidecar watches for. Must match the stack's
+  # sidecar.dashboards.label value.
+  label: grafana_dashboard
+  labelValue: "1"
+  # -- Grafana folder to file the dashboard under.
+  folder: ""
 
 podAnnotations: {}
 podLabels: {}

@@ -146,6 +146,57 @@ func TestMetricsExposedOnAdminPort(t *testing.T) {
 	}
 }
 
+// A replica that has served nothing must still export the request series, or
+// rate() over a fresh pod sees a missing series rather than zero and alerts
+// silently fail to evaluate.
+func TestMetricsAreExportedBeforeAnyRequest(t *testing.T) {
+	srv := newTestServer(t, nil)
+
+	rec := httptest.NewRecorder()
+	srv.adminRoutes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := rec.Body.String()
+
+	want := []string{
+		`http_requests_total{method="GET",route="/",status="200"} 0`,
+		`http_requests_total{method="GET",route="/healthz",status="200"} 0`,
+		`http_requests_total{method="GET",route="/readyz",status="200"} 0`,
+		`http_requests_total{method="GET",route="/readyz",status="503"} 0`,
+		`http_requests_total{method="GET",route="other",status="404"} 0`,
+		`http_request_duration_seconds_count{method="GET",route="/"} 0`,
+	}
+	for _, w := range want {
+		if !strings.Contains(body, w) {
+			t.Errorf("expected pre-initialised series %q in metrics output", w)
+		}
+	}
+}
+
+// The pre-initialised set must not invent combinations the router cannot
+// produce, or the metrics grow permanently-zero series that mislead whoever
+// reads them.
+func TestNoImpossibleSeriesArePreInitialised(t *testing.T) {
+	srv := newTestServer(t, nil)
+
+	rec := httptest.NewRecorder()
+	srv.adminRoutes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := rec.Body.String()
+
+	notWant := []string{
+		// The catch-all handler only ever returns 404.
+		`route="other",status="200"`,
+		// Only the readiness endpoint reports 503.
+		`route="/",status="503"`,
+		`route="/healthz",status="503"`,
+		// Non-GET methods are not routed, so they collapse to route="other".
+		`method="POST",route="/"`,
+	}
+	for _, w := range notWant {
+		if strings.Contains(body, w) {
+			t.Errorf("metrics contain series %q, which this router cannot produce", w)
+		}
+	}
+}
+
 func TestUnknownPathsShareOneRouteLabel(t *testing.T) {
 	srv := newTestServer(t, nil)
 	pub := srv.publicRoutes()
@@ -189,10 +240,13 @@ func TestTraversalPathsAreRedirectedAndNotInstrumented(t *testing.T) {
 	metrics := httptest.NewRecorder()
 	srv.adminRoutes().ServeHTTP(metrics, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 
-	if body := metrics.Body.String(); strings.Contains(body, "etc/passwd") {
+	body := metrics.Body.String()
+	if strings.Contains(body, "etc/passwd") {
 		t.Error("cleaned traversal path leaked into a metric label")
 	}
-	if body := metrics.Body.String(); strings.Contains(body, `route="other"`) {
+	// The series exists from startup because it is pre-initialised, so the
+	// assertion is that its value is still zero rather than that it is absent.
+	if !strings.Contains(body, `http_requests_total{method="GET",route="other",status="404"} 0`) {
 		t.Error("mux redirect was unexpectedly counted as a served request")
 	}
 }

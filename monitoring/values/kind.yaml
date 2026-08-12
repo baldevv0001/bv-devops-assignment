@@ -1,0 +1,80 @@
+# Overrides for the local kind cluster.
+#
+# Layered on top of common.yaml. Everything here exists because the laptop
+# running kind has finite memory, not because the configuration should differ
+# in principle.
+
+prometheus:
+  prometheusSpec:
+    retention: 2h
+    replicas: 1
+
+    # emptyDir rather than a PersistentVolume: kind has no CSI driver, so a PVC
+    # would stay Pending forever and Prometheus would never start. Metrics are
+    # lost when the pod restarts, which is acceptable for a test run.
+    resources:
+      requests:
+        cpu: 100m
+        memory: 400Mi
+      limits:
+        memory: 1Gi
+
+alertmanager:
+  alertmanagerSpec:
+    replicas: 1
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        memory: 128Mi
+
+grafana:
+  replicas: 1
+  persistence:
+    enabled: false
+  # Local-only credentials. On EKS this comes from a pre-created Secret; see
+  # monitoring/values/eks.yaml.
+  adminPassword: admin
+  service:
+    type: NodePort
+    nodePort: 30300
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+
+kubeStateMetrics:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+
+prometheus-node-exporter:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+
+# kind runs a single-node control plane whose scheduler and controller-manager
+# bind to 127.0.0.1 by default, so these targets cannot be scraped from a pod.
+# Leaving them enabled produces permanently-down targets that make a demo look
+# broken when nothing is.
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: false

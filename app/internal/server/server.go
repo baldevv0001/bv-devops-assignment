@@ -354,5 +354,38 @@ func newMetrics(reg prometheus.Registerer, info BuildInfo) *metrics {
 	buildInfo.WithLabelValues(info.Version, info.Commit).Set(1)
 
 	reg.MustRegister(m.requests, m.duration, m.inFlight, buildInfo)
+	m.initSeries()
 	return m
+}
+
+// initSeries creates the label combinations this service can actually produce,
+// so they are exported as zero from startup instead of appearing only once the
+// first matching request arrives.
+//
+// A Prometheus CounterVec exports nothing for a label set it has never
+// observed. On a freshly started replica that means rate(http_requests_total)
+// evaluates against a missing series rather than zero — a dashboard panel
+// shows a gap instead of a flat line, and an alert on error rate cannot fire
+// because there is no series to compare against. Only combinations the router
+// can genuinely produce are listed; inventing others would put permanently
+// zero series in front of anyone reading the metrics.
+func (m *metrics) initSeries() {
+	known := []struct {
+		route    string
+		statuses []int
+	}{
+		{"/", []int{http.StatusOK}},
+		{"/healthz", []int{http.StatusOK}},
+		// Readiness reports 503 for the whole drain window, so that series is
+		// expected rather than exceptional.
+		{"/readyz", []int{http.StatusOK, http.StatusServiceUnavailable}},
+		{"other", []int{http.StatusNotFound}},
+	}
+
+	for _, k := range known {
+		m.duration.WithLabelValues(http.MethodGet, k.route)
+		for _, status := range k.statuses {
+			m.requests.WithLabelValues(http.MethodGet, k.route, strconv.Itoa(status))
+		}
+	}
 }

@@ -41,10 +41,12 @@ spec:
         - -c
         - |
           set -eu
-          BASE="http://{{ include "hello-world.fullname" . }}:{{ .Values.service.port }}"
+          # Absolute name (note the trailing dot): resolved once, with no
+          # search-list expansion and no query that can escape the cluster.
+          BASE="http://{{ include "hello-world.serviceFQDN" . }}:{{ .Values.service.port }}"
 
           echo "GET $BASE/"
-          BODY="$(curl -fsS --max-time 5 "$BASE/")"
+          BODY="$(curl -fsS --max-time 10 "$BASE/")"
           echo "  -> $BODY"
           if [ "$BODY" != {{ .Values.config.message | quote }} ]; then
             echo "FAIL: expected {{ .Values.config.message | quote }}"
@@ -53,13 +55,13 @@ spec:
 
           for path in healthz readyz; do
             echo "GET $BASE/$path"
-            CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$BASE/$path")"
+            CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$BASE/$path")"
             echo "  -> $CODE"
             [ "$CODE" = "200" ] || { echo "FAIL: /$path returned $CODE"; exit 1; }
           done
 
           echo "GET $BASE/metrics (expected 404: metrics must not be on the public port)"
-          CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$BASE/metrics")"
+          CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$BASE/metrics")"
           echo "  -> $CODE"
           [ "$CODE" = "404" ] || { echo "FAIL: /metrics reachable on the public port"; exit 1; }
 
