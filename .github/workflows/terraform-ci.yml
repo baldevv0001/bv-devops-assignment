@@ -77,7 +77,7 @@ jobs:
       # Reports rather than gates: several findings are documented trade-offs,
       # and failing on them would push toward ignore comments.
       - name: Trivy config scan
-        uses: aquasecurity/trivy-action@0.36.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: config
           scan-ref: terraform
