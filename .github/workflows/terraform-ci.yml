@@ -1,8 +1,5 @@
-# Continuous integration for the Terraform configurations.
-#
-# Everything here runs without AWS credentials and creates nothing: format
-# check, validate, the mocked guard tests, and a static security scan. Plans
-# against a real account belong in a workflow with an OIDC role, not here.
+# CI for the Terraform configurations. Runs without AWS credentials and creates
+# nothing: format, validate, mocked guard tests and a static scan.
 name: terraform-ci
 
 on:
@@ -26,7 +23,7 @@ concurrency:
 
 env:
   TF_VERSION: '1.15.8'
-  # Keeps Terraform from prompting or colourising in logs.
+  # Stops Terraform prompting or colourising logs.
   TF_IN_AUTOMATION: 'true'
 
 jobs:
@@ -56,8 +53,7 @@ jobs:
           terraform init -backend=false -input=false
           terraform validate
 
-      # Uses mock_provider, so no credentials and nothing created. Twelve cases
-      # covering the happy path and every guard rail.
+      # Uses mock_provider, so no credentials and nothing created.
       - name: Guard tests
         working-directory: terraform/eks
         run: terraform test
@@ -78,10 +74,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Reports misconfigurations rather than gating the build. Several
-      # findings here are deliberate trade-offs documented in terraform/README,
-      # so failing on them would mean either weakening the docs or adding
-      # ignore comments that hide real findings later.
+      # Reports rather than gates: several findings are documented trade-offs,
+      # and failing on them would push toward ignore comments.
       - name: Trivy config scan
         uses: aquasecurity/trivy-action@0.36.0
         with:

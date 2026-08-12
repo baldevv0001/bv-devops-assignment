@@ -1,12 +1,5 @@
 {{- if .Values.prometheusRule.enabled }}
-{{/*
-Alerts ship with the chart rather than living in the monitoring stack, so a
-rule always matches the version of the application it was written for. Moving
-them into the Prometheus release would mean an app rollback silently leaves
-alerts referencing metrics that no longer exist.
-
-Requires the prometheus-operator CRDs, hence the enable flag.
-*/}}
+{{/* Alerts ship with the chart so they match the app version. Needs the CRDs. */}}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:

@@ -1,15 +1,8 @@
-# Native Terraform tests for the configuration's guard rails.
+# Guard-rail tests. Run with: terraform test
 #
-# Run with: terraform test
-#
-# mock_provider means these need no AWS credentials and create nothing, so they
-# run in CI on every pull request. Each `run` block asserts that a specific
-# misconfiguration is rejected — if one of these ever passes, a guard has
-# silently stopped protecting anything.
+# mock_provider means no AWS credentials and nothing created, so these run in CI.
 
-# Baseline for every run. Without this each test inherits the module's own
-# defaults, which include an API endpoint open to 0.0.0.0/0 — so every test
-# would trip that guard in addition to the one it is actually checking.
+# Baseline, so tests do not all trip the open-API guard as well as their own.
 variables {
   endpoint_public_access         = true
   endpoint_public_access_cidrs   = ["203.0.113.4/32"]
@@ -41,9 +34,7 @@ mock_provider "aws" {
     }
   }
 
-  # Without this the mock invents a placeholder string for `json`, and every
-  # aws_iam_role rejects it as "not a JSON object" — an artefact of mocking
-  # that would otherwise drown out the failures these tests are checking for.
+  # Without this the mock returns a placeholder that is not valid JSON.
   mock_data "aws_iam_policy_document" {
     defaults = {
       json          = "{\"Version\":\"2012-10-17\",\"Statement\":[]}"
@@ -51,8 +42,7 @@ mock_provider "aws" {
     }
   }
 
-  # Likewise: a random partition string turns every managed-policy ARN the
-  # module builds into an invalid ARN.
+  # A random partition would make every managed-policy ARN invalid.
   mock_data "aws_partition" {
     defaults = {
       partition          = "aws"
@@ -70,11 +60,7 @@ mock_provider "aws" {
 }
 
 # ---------------------------------------------------------------------------
-# Happy path
-#
-# The rejection tests below would all still pass if the configuration were
-# broken in some way that made every plan fail. This one proves a valid
-# configuration plans cleanly and derives the values it should.
+# Happy path: proves a valid config plans, not just that bad ones are rejected.
 # ---------------------------------------------------------------------------
 
 run "valid_configuration_plans_and_derives_expected_topology" {
@@ -108,17 +94,14 @@ run "valid_configuration_plans_and_derives_expected_topology" {
     error_message = "single_nat_gateway = true should produce exactly one NAT gateway."
   }
 
-  # Pod Identity, not IRSA: no OIDC provider should be created.
+  # Pod Identity, not IRSA, so no OIDC provider.
   assert {
     condition     = output.oidc_provider_arn == null
     error_message = "An OIDC provider was created; this cluster is meant to use EKS Pod Identity instead of IRSA."
   }
 }
 
-# The optional addons are guarded by count/conditional expressions that index
-# into module.ebs_csi_pod_identity[0]. Nothing exercises those indexes unless a
-# test turns the addons off, so this run is what proves the disabled path is
-# not a latent "index out of range" at apply time.
+# Exercises the [0] indexes on the disabled path, which nothing else covers.
 run "plans_with_optional_addons_disabled" {
   command = plan
 
@@ -201,9 +184,7 @@ run "rejects_desired_size_above_maximum" {
   expect_failures = [var.node_desired_size]
 }
 
-# Fewer nodes than zones means at least one zone is empty, and the chart's
-# zone spread constraint uses whenUnsatisfiable: DoNotSchedule — so a replica
-# would sit Pending forever with no obvious link back to this setting.
+# Fewer nodes than zones leaves a zone empty, so a replica sits Pending.
 run "rejects_fewer_nodes_than_availability_zones" {
   command = plan
 
@@ -241,8 +222,7 @@ run "rejects_single_availability_zone" {
   expect_failures = [var.az_count]
 }
 
-# The VPC CNI gives every pod a real VPC address, so an undersized VPC runs out
-# of pod IPs long before it runs out of nodes.
+# The VPC CNI gives every pod a real VPC address, so small VPCs run out of IPs.
 run "rejects_vpc_cidr_too_small_for_pod_addresses" {
   command = plan
 

@@ -28,12 +28,7 @@ spec:
         {{- end }}
       {{- with .Values.podAnnotations }}
       annotations:
-        {{/*
-        Values are quoted rather than passed through toYaml, because
-        annotation values must be strings. A rollout-triggering timestamp
-        (--set podAnnotations.rollout=$(date +%s)) is the common way to hit
-        this, and unquoted it fails the upgrade with an opaque unmarshal error.
-        */}}
+        {{/* Quoted because annotation values must be strings. */}}
         {{- range $key, $value := . }}
         {{ $key }}: {{ $value | quote }}
         {{- end }}
@@ -50,8 +45,7 @@ spec:
       {{- end }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
-      # Must exceed drainDelay + shutdownTimeout, or the kubelet sends SIGKILL
-      # while the process is still draining connections.
+      # Must exceed drainDelay + shutdownTimeout, or the drain is cut short.
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       containers:
         - name: {{ .Chart.Name }}
@@ -96,8 +90,7 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           {{- if .Values.probes.startup.enabled }}
-          # Liveness is suspended until the startup probe succeeds, so a slow
-          # start can never be misread as a hang and restarted in a loop.
+          # Liveness is held off until this passes, so a slow start is not a restart loop.
           startupProbe:
             httpGet:
               path: /healthz
@@ -106,8 +99,7 @@ spec:
             failureThreshold: {{ .Values.probes.startup.failureThreshold }}
           {{- end }}
           {{- if .Values.probes.liveness.enabled }}
-          # Liveness asks only "is this process still working"; it must not
-          # depend on downstreams, or a dependency outage restarts every pod.
+          # Process health only. Depending on downstreams would restart every pod.
           livenessProbe:
             httpGet:
               path: /healthz
@@ -117,7 +109,7 @@ spec:
             failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
           {{- end }}
           {{- if .Values.probes.readiness.enabled }}
-          # Readiness gates Service endpoints and returns 503 during the drain.
+          # Gates Service endpoints and returns 503 during the drain.
           readinessProbe:
             httpGet:
               path: /readyz
@@ -127,10 +119,7 @@ spec:
             failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
             successThreshold: {{ .Values.probes.readiness.successThreshold }}
           {{- end }}
-          # No preStop hook. The usual "preStop: sleep 5" trick exists to hold a
-          # pod open while endpoint removal propagates, but it needs a shell the
-          # distroless image does not have. The application performs that drain
-          # itself on SIGTERM, which is both more precise and observable in logs.
+          # No preStop hook: the app drains itself on SIGTERM, and there is no shell.
           resources:
             requests:
               {{- toYaml .Values.resources.requests | nindent 14 }}
@@ -143,21 +132,17 @@ spec:
               {{- end }}
       {{- if .Values.topologySpread.enabled }}
       topologySpreadConstraints:
-        # Spread across availability zones first. This is what makes losing an
-        # AZ a partial capacity loss rather than a full outage.
+        # Zone spread turns losing an AZ into partial capacity loss.
         - maxSkew: {{ .Values.topologySpread.zone.maxSkew }}
           topologyKey: topology.kubernetes.io/zone
           whenUnsatisfiable: {{ .Values.topologySpread.zone.whenUnsatisfiable }}
-          # Scope the calculation to the current ReplicaSet, so pods from the
-          # outgoing revision during a rolling update do not count as skew and
-          # deadlock the rollout.
+          # Scopes skew to the current ReplicaSet, so a rollout cannot deadlock.
           matchLabelKeys:
             - pod-template-hash
           labelSelector:
             matchLabels:
               {{- include "hello-world.selectorLabels" . | nindent 14 }}
-        # Then spread across nodes within a zone, so a single node failure
-        # cannot take out more than one replica.
+        # Node spread, so one node failure cannot take out two replicas.
         - maxSkew: {{ .Values.topologySpread.node.maxSkew }}
           topologyKey: kubernetes.io/hostname
           whenUnsatisfiable: {{ .Values.topologySpread.node.whenUnsatisfiable }}

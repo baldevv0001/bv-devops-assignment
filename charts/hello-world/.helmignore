@@ -10,12 +10,8 @@
 *~
 *.tgz
 
-# Values used only for local kind runs. Anchored with a leading slash so the
-# pattern matches this directory and nothing nested.
+# Local kind values. Anchored, so nothing nested is matched.
 /ci/
 
-# NOTE: do not add a bare "tests/" pattern here. It would match at any depth
-# and silently drop templates/tests/, so `helm test` would work when the chart
-# is installed from this directory but do nothing at all when installed from a
-# package — the failure only shows up once the chart is consumed from a
-# registry. The helm test hook must ship with the chart.
+# Do not add a bare "tests/" pattern: it matches at any depth and would drop
+# templates/tests/, so `helm test` would do nothing from a packaged chart.

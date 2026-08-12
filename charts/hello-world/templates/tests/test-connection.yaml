@@ -1,13 +1,5 @@
 {{- if .Values.tests.enabled }}
-{{/*
-Run with `helm test <release>`. This exercises the Service from inside the
-cluster, which covers what a template render cannot: that the selector actually
-matches running pods and that they are Ready and answering.
-
-It checks only the public port. The metrics port is deliberately not tested
-here, because the NetworkPolicy restricts :9090 to the monitoring namespace and
-this pod is not in it — a passing check would mean the policy was not working.
-*/}}
+{{/* Checks the Service from inside the cluster. Public port only: 9090 is denied here. */}}
 apiVersion: v1
 kind: Pod
 metadata:
@@ -41,8 +33,7 @@ spec:
         - -c
         - |
           set -eu
-          # Absolute name (note the trailing dot): resolved once, with no
-          # search-list expansion and no query that can escape the cluster.
+          # Trailing dot makes this absolute, so there is no search-list expansion.
           BASE="http://{{ include "hello-world.serviceFQDN" . }}:{{ .Values.service.port }}"
 
           echo "GET $BASE/"

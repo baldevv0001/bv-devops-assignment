@@ -1,12 +1,6 @@
-// Package server implements the Hello World HTTP service.
-//
-// The service listens on two separate ports:
-//
-//   - the public port serves "/", "/healthz" and "/readyz". This is the only
-//     port fronted by the Kubernetes Service and the cloud load balancer.
-//   - the admin port serves "/metrics". Keeping Prometheus metrics off the
-//     public listener means a NetworkPolicy can restrict scraping to the
-//     monitoring namespace without also restricting user traffic.
+// Package server implements the Hello World HTTP service. Public traffic and
+// Prometheus metrics use separate ports, so a NetworkPolicy can restrict
+// scraping without touching user traffic.
 package server
 
 import (
@@ -27,16 +21,13 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// BuildInfo is stamped in at link time and exported as a Prometheus gauge, so
-// that the build actually running in a cluster can be identified from metrics
-// alone rather than by inspecting image tags.
+// BuildInfo is stamped in at link time and exported as a Prometheus gauge.
 type BuildInfo struct {
 	Version string
 	Commit  string
 }
 
-// Config holds the runtime configuration, sourced entirely from the
-// environment so that the same image is promoted unchanged between clusters.
+// Config holds the runtime configuration, sourced from the environment.
 type Config struct {
 	Addr      string
 	AdminAddr string
@@ -48,17 +39,13 @@ type Config struct {
 	IdleTimeout     time.Duration
 	ShutdownTimeout time.Duration
 
-	// DrainDelay is how long the service keeps serving traffic after SIGTERM
-	// while already reporting NotReady. Endpoint removal in Kubernetes is
-	// eventually consistent: kube-proxy on every node has to observe the
-	// EndpointSlice update and rewrite its rules. Shutting down before that
-	// propagates is the usual cause of 502s during a rolling update.
+	// DrainDelay is how long to keep serving after SIGTERM while reporting
+	// NotReady, so kube-proxy can remove this pod from the Service first.
 	DrainDelay time.Duration
 }
 
-// ConfigFromEnv builds a Config from environment variables, applying defaults
-// for anything unset. It returns an error rather than falling back silently,
-// so a typo in a Helm value fails the pod instead of quietly changing behaviour.
+// ConfigFromEnv builds a Config from the environment, erroring on bad values
+// rather than falling back silently.
 func ConfigFromEnv() (Config, error) {
 	cfg := Config{
 		Addr:            ":" + envString("PORT", "8080"),
@@ -126,15 +113,11 @@ type Server struct {
 	metrics *metrics
 	reg     *prometheus.Registry
 
-	// ready gates /readyz. It flips to false on SIGTERM before the listeners
-	// close, so that load balancers stop sending new connections while
-	// in-flight requests are still allowed to finish.
+	// ready gates /readyz and flips to false on SIGTERM before listeners close.
 	ready atomic.Bool
 }
 
-// New constructs a Server with its own Prometheus registry. Using a dedicated
-// registry instead of the global default keeps the exported metric set
-// explicit and makes the server safe to instantiate repeatedly in tests.
+// New constructs a Server with its own Prometheus registry.
 func New(cfg Config, log *slog.Logger, info BuildInfo) *Server {
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(
@@ -149,8 +132,7 @@ func New(cfg Config, log *slog.Logger, info BuildInfo) *Server {
 	}
 }
 
-// Run starts both listeners and blocks until ctx is cancelled, then drains and
-// shuts them down. It returns nil on a clean shutdown.
+// Run starts both listeners and blocks until ctx is cancelled, then drains.
 func (s *Server) Run(ctx context.Context) error {
 	public := &http.Server{
 		Addr:              s.cfg.Addr,
@@ -198,8 +180,7 @@ func (s *Server) drainAndShutdown(servers ...*http.Server) error {
 	s.log.Info("shutdown signal received, failing readiness", "drain_delay", s.cfg.DrainDelay)
 	s.ready.Store(false)
 
-	// Give Kubernetes time to pull this pod out of the Service endpoints
-	// before we stop accepting connections.
+	// Give Kubernetes time to drop this pod from the Service endpoints.
 	time.Sleep(s.cfg.DrainDelay)
 
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.ShutdownTimeout)
@@ -217,13 +198,11 @@ func (s *Server) drainAndShutdown(servers ...*http.Server) error {
 
 func (s *Server) publicRoutes() http.Handler {
 	mux := http.NewServeMux()
-	// "GET /{$}" matches the root path exactly, rather than acting as a
-	// catch-all the way a bare "/" pattern would.
+	// "GET /{$}" matches the root path exactly rather than acting as a catch-all.
 	mux.Handle("GET /{$}", s.instrument("/", s.handleHello))
 	mux.Handle("GET /healthz", s.instrument("/healthz", s.handleHealthz))
 	mux.Handle("GET /readyz", s.instrument("/readyz", s.handleReadyz))
-	// Everything else collapses into a single "other" route label. Recording
-	// the raw path here would let any scanner blow up metric cardinality.
+	// Everything else shares one route label to bound metric cardinality.
 	mux.Handle("/", s.instrument("other", s.handleNotFound))
 	return mux
 }
@@ -233,8 +212,7 @@ func (s *Server) adminRoutes() http.Handler {
 	mux.Handle("GET /metrics", promhttp.HandlerFor(s.reg, promhttp.HandlerOpts{
 		ErrorHandling: promhttp.ContinueOnError,
 	}))
-	// Probes are duplicated on the admin port so that the metrics listener can
-	// be health-checked independently of user-facing traffic.
+	// Probes are duplicated here so the metrics port can be checked on its own.
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
 	return mux
@@ -246,10 +224,8 @@ func (s *Server) handleHello(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, s.cfg.Message)
 }
 
+// handleHealthz reports process health only, never downstream health.
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
-	// Liveness only asserts the process is running and able to serve. It must
-	// not depend on downstream health, or a dependency outage turns into a
-	// cluster-wide restart loop.
 	writePlain(w, http.StatusOK, "ok")
 }
 
@@ -271,9 +247,8 @@ func writePlain(w http.ResponseWriter, status int, body string) {
 	fmt.Fprintln(w, body)
 }
 
-// instrument wraps a handler with request metrics. The route label is passed
-// in explicitly rather than derived from the URL, which bounds cardinality by
-// construction.
+// instrument wraps a handler with request metrics. The route label is passed in
+// rather than read from the URL, which bounds cardinality by construction.
 func (s *Server) instrument(route string, next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -297,8 +272,7 @@ func (s *Server) instrument(route string, next http.HandlerFunc) http.Handler {
 	})
 }
 
-// statusRecorder captures the response status so it can be used as a metric
-// label, since net/http does not expose it after the fact.
+// statusRecorder captures the response status for use as a metric label.
 type statusRecorder struct {
 	http.ResponseWriter
 	status      int
@@ -336,9 +310,7 @@ func newMetrics(reg prometheus.Registerer, info BuildInfo) *metrics {
 		duration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name: "http_request_duration_seconds",
 			Help: "HTTP request latency in seconds, by method and route.",
-			// Buckets are tuned for a service whose normal response is well
-			// under a millisecond; the default buckets start too coarse to
-			// show any useful detail here.
+			// Tuned for sub-millisecond responses; the defaults start too coarse.
 			Buckets: []float64{0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5},
 		}, []string{"method", "route"}),
 		inFlight: prometheus.NewGauge(prometheus.GaugeOpts{
@@ -358,17 +330,8 @@ func newMetrics(reg prometheus.Registerer, info BuildInfo) *metrics {
 	return m
 }
 
-// initSeries creates the label combinations this service can actually produce,
-// so they are exported as zero from startup instead of appearing only once the
-// first matching request arrives.
-//
-// A Prometheus CounterVec exports nothing for a label set it has never
-// observed. On a freshly started replica that means rate(http_requests_total)
-// evaluates against a missing series rather than zero — a dashboard panel
-// shows a gap instead of a flat line, and an alert on error rate cannot fire
-// because there is no series to compare against. Only combinations the router
-// can genuinely produce are listed; inventing others would put permanently
-// zero series in front of anyone reading the metrics.
+// initSeries exports the label sets this router can produce as zero from
+// startup, so rate() on a new replica sees zero instead of a missing series.
 func (m *metrics) initSeries() {
 	known := []struct {
 		route    string
@@ -376,8 +339,7 @@ func (m *metrics) initSeries() {
 	}{
 		{"/", []int{http.StatusOK}},
 		{"/healthz", []int{http.StatusOK}},
-		// Readiness reports 503 for the whole drain window, so that series is
-		// expected rather than exceptional.
+		// Readiness returns 503 for the whole drain window.
 		{"/readyz", []int{http.StatusOK, http.StatusServiceUnavailable}},
 		{"other", []int{http.StatusNotFound}},
 	}

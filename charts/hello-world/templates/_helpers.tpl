@@ -1,14 +1,9 @@
-{{/*
-Chart name, overridable with nameOverride.
-*/}}
+{{/* Chart name, overridable with nameOverride. */}}
 {{- define "hello-world.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
-{{/*
-Fully qualified resource name. Truncated to 63 characters because that is the
-limit for a Kubernetes label value, and this name is used as one.
-*/}}
+{{/* Fully qualified name, truncated to the 63-character label limit. */}}
 {{- define "hello-world.fullname" -}}
 {{- if .Values.fullnameOverride }}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
@@ -26,9 +21,7 @@ limit for a Kubernetes label value, and this name is used as one.
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
-{{/*
-Labels applied to every object.
-*/}}
+{{/* Labels applied to every object. */}}
 {{- define "hello-world.labels" -}}
 helm.sh/chart: {{ include "hello-world.chart" . }}
 {{ include "hello-world.selectorLabels" . }}
@@ -42,11 +35,7 @@ app.kubernetes.io/part-of: {{ include "hello-world.name" . }}
 {{- end }}
 {{- end }}
 
-{{/*
-Selector labels. These end up in an immutable Deployment selector, so they must
-never include anything that changes between upgrades — a chart or app version
-here would make every upgrade fail.
-*/}}
+{{/* Selector labels. Immutable in the Deployment, so nothing version-dependent. */}}
 {{- define "hello-world.selectorLabels" -}}
 app.kubernetes.io/name: {{ include "hello-world.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
@@ -60,10 +49,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 {{- end }}
 
-{{/*
-Full image reference. A digest, when supplied, wins over the tag so that a
-release is pinned to exact content rather than to a mutable pointer.
-*/}}
+{{/* Image reference. A digest, when set, wins over the tag. */}}
 {{- define "hello-world.image" -}}
 {{- $repository := .Values.image.repository -}}
 {{- if .Values.image.registry -}}
@@ -76,32 +62,17 @@ release is pinned to exact content rather than to a mutable pointer.
 {{- end -}}
 {{- end }}
 
-{{/*
-Name of the metrics Service.
-*/}}
+{{/* Name of the metrics Service. */}}
 {{- define "hello-world.metricsServiceName" -}}
 {{- printf "%s-metrics" (include "hello-world.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
-{{/*
-Fully-qualified DNS name of the main Service, with a trailing dot.
-
-The trailing dot makes the name absolute, so the resolver looks it up once and
-skips the search list entirely. Without it a short name is tried against each
-search domain and then, on some resolvers, as a bare absolute name — a query
-that leaves the cluster and stalls for the full DNS timeout wherever the
-upstream resolver is unreachable, which is the normal situation for a local
-kind cluster behind WSL.
-*/}}
+{{/* Absolute DNS name of the main Service. The trailing dot skips the search list. */}}
 {{- define "hello-world.serviceFQDN" -}}
 {{- printf "%s.%s.svc.%s." (include "hello-world.fullname" .) .Release.Namespace .Values.clusterDomain }}
 {{- end }}
 
-{{/*
-Guard against configurations that render valid YAML but misbehave at runtime.
-Failing at template time turns a silent production problem into an install
-error with an explanation.
-*/}}
+{{/* Guards for values that render valid YAML but misbehave at runtime. */}}
 {{- define "hello-world.validateValues" -}}
 {{- $drain := .Values.config.drainDelay | toString -}}
 {{- $shutdown := .Values.config.shutdownTimeout | toString -}}
@@ -114,10 +85,7 @@ error with an explanation.
 {{- if and .Values.podDisruptionBudget.enabled .Values.podDisruptionBudget.minAvailable .Values.podDisruptionBudget.maxUnavailable -}}
 {{- fail "set only one of podDisruptionBudget.minAvailable or podDisruptionBudget.maxUnavailable" -}}
 {{- end -}}
-{{/*
-A PDB that permits no disruption at all blocks node drains indefinitely, which
-turns a routine cluster upgrade into an outage of its own.
-*/}}
+{{/* A PDB allowing no disruption blocks node drains forever. */}}
 {{- if and .Values.podDisruptionBudget.enabled .Values.podDisruptionBudget.minAvailable -}}
 {{- $replicas := int .Values.replicaCount -}}
 {{- if .Values.autoscaling.enabled -}}

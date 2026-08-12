@@ -1,18 +1,6 @@
 #!/usr/bin/env bash
-#
-# Verifies that the monitoring stack is actually monitoring things.
-#
-# "All pods are Running" proves very little: Prometheus runs happily with zero
-# targets, and a dashboard ConfigMap that the sidecar never picked up looks
-# exactly like one it did. Every check here queries the Prometheus or Grafana
-# API for a result.
-#
+# Verifies monitoring by querying the Prometheus and Grafana APIs.
 # Usage: scripts/monitoring-test.sh [kind|eks] [--fire-alert]
-#
-#   --fire-alert  additionally scales the application to zero and waits for
-#                 HelloWorldAllReplicasDown to reach Alertmanager, then
-#                 restores it. Takes about four minutes and causes a real
-#                 outage, so it is opt-in.
 
 set -euo pipefail
 
@@ -47,16 +35,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# One long-lived probe pod, execed into for every request.
-#
-# The obvious alternative — `kubectl run --rm -i` per request — drops its output
-# intermittently, which shows up as checks that fail while the thing they test
-# is demonstrably working. A single pod plus exec is deterministic and much
-# faster, since nothing is scheduled per query.
-#
-# It runs inside the cluster rather than through a port-forward because the
-# NetworkPolicy only admits the monitoring namespace; a port-forward would
-# bypass the very thing under test.
+# One long-lived probe pod, execed into per request; `kubectl run --rm -i` drops
+# output intermittently. In-cluster, because the policy only admits this namespace.
 start_probe() {
   "${K[@]}" delete pod "$PROBE_POD" -n "$NAMESPACE" --ignore-not-found --now >/dev/null 2>&1 || true
   "${K[@]}" run "$PROBE_POD" -n "$NAMESPACE" --image="$CURL_IMAGE" --restart=Never \
@@ -68,12 +48,8 @@ incluster_curl() {
   "${K[@]}" exec -n "$NAMESPACE" "$PROBE_POD" -- curl -sS --max-time 20 "$@" 2>/dev/null || true
 }
 
-# Fetches a URL into a file. Parsing always reads from a file rather than from
-# a shell variable interpolated into Python source: API responses contain
-# backslash escapes (PromQL expressions are full of \"), and Python would
-# interpret those escapes before json.loads ever saw them. The parse then threw,
-# the except branch printed nothing, and the check reported a false result —
-# in one case a false *pass*.
+# Fetches a URL into a file. Parsing reads the file rather than a variable
+# interpolated into Python, whose backslash escapes would break json.loads.
 fetch_json() {
   local url="$1" out="$2"
   incluster_curl "$url" > "$out"
@@ -92,8 +68,7 @@ except Exception:
 "
 }
 
-# Prints the alertstate label of the first matching ALERTS series. Alert state
-# lives in a label, not in the sample value, so promql_value cannot read it.
+# Alert state lives in a label, not the sample value, so read it separately.
 promql_value_state() {
   incluster_curl -G --data-urlencode "query=$1" "${PROM}/api/v1/query" \
     | python3 -c "
@@ -120,17 +95,12 @@ except Exception:
 
 section "Preflight"
 
-# Both prerequisites are easy to lose without noticing: scripts/chart-test.sh
-# uninstalls the application release when it finishes, which takes the
-# ServiceMonitor and alert rules with it. Without this check that shows up as a
-# dozen unrelated-looking failures further down instead of one clear message.
+# chart-test.sh uninstalls the app release when it finishes, which removes the
+# ServiceMonitor and rules. Without this that looks like a dozen failures.
 MISSING=""
 "${K[@]}" get namespace "$NAMESPACE" >/dev/null 2>&1 || MISSING+="  - the ${NAMESPACE} namespace does not exist\n"
-# Counted with wc rather than tested with `grep -q`. Under `set -o pipefail` a
-# `producer | grep -q` pipeline is a race: grep exits at the first match, the
-# producer gets SIGPIPE, and pipefail reports the whole pipeline as failed. That
-# made this preflight intermittently claim the stack was not installed while
-# nine pods were running. wc reads its input to the end, so it cannot misfire.
+# wc, not `grep -q`: under pipefail, grep exiting early sends SIGPIPE to the
+# producer and the whole pipeline reports failure.
 POD_COUNT="$("${K[@]}" get pods -n "$NAMESPACE" --no-headers 2>/dev/null | wc -l)"
 if [[ "${POD_COUNT:-0}" -eq 0 ]]; then
   MISSING+="  - no pods in ${NAMESPACE}; kube-prometheus-stack is not installed\n"
@@ -160,13 +130,8 @@ section "Probe"
 start_probe
 pass "probe pod ready in the ${NAMESPACE} namespace"
 
-# Waits for a condition, polling every 5s.
-#
-# Nothing here is synchronous. After the application is installed the operator
-# has to regenerate Prometheus's config, Prometheus has to reload it, service
-# discovery has to run, and only then does a scrape interval elapse before the
-# first sample exists. Sampling once immediately after an install reliably
-# reports everything as broken.
+# Polls for a condition. After an install the operator regenerates config,
+# Prometheus reloads, discovery runs, and only then does a scrape happen.
 wait_for() {
   local timeout="$1"; shift
   local deadline=$((SECONDS + timeout))
@@ -177,17 +142,9 @@ wait_for() {
   return 1
 }
 
-# Counts targets Prometheus is scraping *right now*.
-#
-# Deliberately not `sum(up{...})`: an instant query resolves each series to its
-# last sample within a five-minute lookback, so pods deleted moments ago still
-# contribute their final up=1. Straight after a redeploy that reports six
-# healthy replicas when three exist. The targets API reports live state.
-# Matched on the job label, which the operator sets to the Service name
-# (hw-hello-world-metrics). Not on scrapePool, which is named after the
-# ServiceMonitor (serviceMonitor/hello-world/hw-hello-world/0) and contains no
-# "metrics"; and not on a substring of the whole target, because the
-# cluster=hello-world external label makes every target in the cluster match.
+# Counts targets scraped right now. Not `sum(up{...})`, whose five-minute
+# lookback still counts pods deleted moments ago. Matched on the job label,
+# since scrapePool is named after the ServiceMonitor and has no "metrics" in it.
 active_up_targets() {
   incluster_curl "${PROM}/api/v1/targets?state=active" \
     | python3 -c "
@@ -203,16 +160,13 @@ except Exception:
 }
 
 targets_up()   { [[ "$(active_up_targets)" == "3" ]]; }
-# Buffered into a variable before grepping, for the SIGPIPE reason above — the
-# rules payload is hundreds of kilobytes, which makes the race far more likely
-# than it looks.
+# Buffered before grepping, for the SIGPIPE reason above.
 rules_loaded() {
   local out
   out="$(incluster_curl "${PROM}/api/v1/rules")"
   grep -q 'HelloWorldAllReplicasDown' <<<"$out"
 }
-# rate() needs at least two points inside its window, so a freshly discovered
-# target has to be scraped twice before this returns anything at all.
+# rate() needs two points, so a new target must be scraped twice.
 rate_ready()   { [[ -n "$(promql_value 'sum(rate(http_requests_total[5m]))')" ]]; }
 
 printf '        waiting for service discovery and rule evaluation to settle\n'
@@ -240,9 +194,7 @@ except Exception: print('')
 # ---------------------------------------------------------------------------
 section "Application scraping"
 
-# The ServiceMonitor is created by the app chart in a different namespace and a
-# different Helm release, so this also proves the operator's selector is not
-# restricted to its own release label.
+# Created by a different release, so this also proves the selector is not scoped.
 SM="$("${K[@]}" get servicemonitor -n "$APP_NAMESPACE" -o name 2>/dev/null | wc -l)"
 if [[ "$SM" -ge 1 ]]; then
   pass "ServiceMonitor exists in the application namespace"
@@ -267,8 +219,7 @@ except Exception as e:
 "
 fi
 
-# Scraping succeeding at all is itself the proof that the NetworkPolicy admits
-# the monitoring namespace to port 9090 while denying everyone else.
+# Scraping working at all proves the NetworkPolicy admits this namespace.
 if [[ "${UP:-0}" == "3" ]]; then
   pass "NetworkPolicy permits scraping from the monitoring namespace"
 fi
@@ -283,8 +234,7 @@ fi
 # ---------------------------------------------------------------------------
 section "Pre-initialised series"
 
-# The point of pre-initialising: a replica that has served no traffic must
-# still export the counter, so rate() sees zero rather than a missing series.
+# A replica that has served nothing must still export the counter.
 for route in "/" "/healthz" "other"; do
   COUNT="$(promql_count "http_requests_total{route=\"${route}\"}")"
   if [[ "$COUNT" -ge 1 ]]; then
@@ -294,8 +244,7 @@ for route in "/" "/healthz" "other"; do
   fi
 done
 
-# rate() over a series that exists returns a number; over a missing one it
-# returns nothing at all. This is the assertion that matters for alerting.
+# rate() over a missing series returns nothing at all.
 RATE="$(promql_value 'sum(rate(http_requests_total[5m]))')"
 if [[ -n "$RATE" ]]; then
   pass "rate() over the request counter evaluates (${RATE} req/s)"
@@ -333,8 +282,7 @@ for rule in "${EXPECTED_RULES[@]}"; do
   fi
 done
 
-# A rule that is loaded but whose expression errors is worse than no rule: it
-# looks healthy and never fires. Check none are in an error state.
+# A loaded rule whose expression errors looks healthy and never fires.
 BROKEN="$(python3 -c "
 import json,sys
 d = json.load(sys.stdin)
@@ -349,9 +297,7 @@ d = json.load(sys.stdin)
 print(sum(len(g['rules']) for g in d['data']['groups']))
 " < "$RULES_FILE")"
 
-# Asserting on a rule count as well as on emptiness: an empty 'broken' list
-# means nothing only if rules were actually parsed. Previously a parse failure
-# produced an empty list and reported a false pass.
+# An empty list means nothing unless rules were actually parsed.
 if [[ "${RULE_COUNT:-0}" -lt 1 ]]; then
   fail "no rules parsed from the API; the health check below would be meaningless"
 elif [[ -z "$BROKEN" ]]; then
@@ -361,8 +307,7 @@ else
   echo "$BROKEN" | sed 's/^/        /'
 fi
 
-# Watchdog is the stack's own proof-of-life alert. If it is not firing, the
-# alerting pipeline is not working and nothing else would fire either.
+# Watchdog is the stack's own proof-of-life alert.
 WATCHDOG="$(promql_value 'ALERTS{alertname="Watchdog",alertstate="firing"}')"
 if [[ -n "$WATCHDOG" ]]; then
   pass "Watchdog alert is firing (the alerting pipeline is alive)"
@@ -404,11 +349,8 @@ else
   fail "Grafana health check failed (got: ${HEALTH:-<empty>})"
 fi
 
-# The dashboard is delivered as a labelled ConfigMap and loaded by a sidecar.
-# Asking Grafana for it by uid is the only way to know the sidecar actually
-# picked it up — the ConfigMap existing proves nothing.
-# The sidecar writes the file, then Grafana's file provisioner imports it on
-# its own schedule. Retry rather than assume the import has already happened.
+# Asking Grafana by uid is the only proof the sidecar picked the ConfigMap up.
+# The sidecar writes the file, then Grafana imports it on its own schedule.
 DASH_FILE="$(mktemp)"
 TITLE=""
 for _ in $(seq 1 12); do
@@ -474,9 +416,7 @@ if [[ "$FIRE_ALERT" -eq 1 ]]; then
 
   if [[ "$STATE" == "firing" ]]; then
     pass "HelloWorldAllReplicasDown fired after the outage"
-    # This is the case the absent() arm exists for: with no replicas left there
-    # is no `up` series at all, so a bare "== 0" would never fire — precisely
-    # when the outage is total.
+    # With no replicas there is no `up` series, so a bare "== 0" would not fire.
     pass "the absent() arm handled the total-outage case"
   else
     fail "HelloWorldAllReplicasDown did not reach firing (last state: ${STATE:-none})"

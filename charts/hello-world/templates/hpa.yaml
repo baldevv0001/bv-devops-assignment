@@ -18,8 +18,7 @@ spec:
   maxReplicas: {{ .Values.autoscaling.maxReplicas }}
   metrics:
     {{- if .Values.autoscaling.targetCPUUtilizationPercentage }}
-    # Utilisation is a percentage of the *request*, not of the node, so this
-    # only behaves sensibly because resources.requests.cpu is always set.
+    # Utilisation is a percentage of the request, which is always set.
     - type: Resource
       resource:
         name: cpu

@@ -1,8 +1,4 @@
-{{/*
-The user-facing Service. It carries only the HTTP port: a LoadBalancer Service
-publishes every port it lists, so adding the metrics port here would expose
-/metrics to the internet as soon as service.type is changed.
-*/}}
+{{/* User-facing Service, HTTP port only. A LoadBalancer publishes every port it lists. */}}
 apiVersion: v1
 kind: Service
 metadata:
@@ -36,10 +32,7 @@ spec:
     {{- include "hello-world.selectorLabels" . | nindent 4 }}
 ---
 {{- if .Values.metricsService.enabled }}
-{{/*
-Metrics Service, deliberately always ClusterIP. This is what the ServiceMonitor
-selects, and it is only reachable from inside the cluster.
-*/}}
+{{/* Metrics Service, always ClusterIP. This is what the ServiceMonitor selects. */}}
 apiVersion: v1
 kind: Service
 metadata:

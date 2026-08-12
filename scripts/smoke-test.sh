@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
-#
-# Smoke-tests a built hello-world image: every endpoint answers, metrics are
-# reachable only on the admin port, the process runs as non-root, and SIGTERM
-# produces a clean drain rather than a killed container.
-#
+# Smoke-tests a built image: endpoints, metrics isolation, non-root, clean drain.
 # Usage: scripts/smoke-test.sh <image-ref>
 
 set -euo pipefail
@@ -30,7 +26,7 @@ check() {
 }
 
 echo "==> Starting $IMAGE"
-# A short drain keeps the shutdown test quick; production defaults to 5s.
+# Short drain keeps the test quick; the default is 5s.
 docker run -d --name "$CONTAINER" \
   -e DRAIN_DELAY=1s \
   -e MESSAGE="Hello World" \
@@ -95,8 +91,7 @@ echo "==> Container hardening"
 check "image declares a non-root user" \
   "65532:65532" "$(docker inspect -f '{{.Config.User}}' "$CONTAINER")"
 
-# A distroless image has no shell, so an exec must fail. That failure is the
-# assertion: there is no interactive foothold inside the container.
+# Distroless has no shell, so this exec failing is the assertion.
 if docker exec "$CONTAINER" /bin/sh -c 'echo reachable' >/dev/null 2>&1; then
   fail "a shell is present in the runtime image"
 else
@@ -107,8 +102,7 @@ echo
 echo "==> Graceful shutdown"
 docker kill --signal=TERM "$CONTAINER" >/dev/null
 
-# Readiness must fail before the listener closes, so load balancers stop
-# sending traffic while in-flight requests finish.
+# Readiness must fail before the listener closes.
 DRAINING=0
 for _ in $(seq 1 20); do
   code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 1 "http://${APP_ADDR}/readyz" || true)"

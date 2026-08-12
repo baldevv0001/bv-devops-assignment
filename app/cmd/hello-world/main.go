@@ -11,7 +11,7 @@ import (
 	"github.com/baldevv0001/bv-devops-assignment/app/internal/server"
 )
 
-// Populated at link time via -ldflags; see the Dockerfile and Makefile.
+// Set at link time via -ldflags.
 var (
 	version = "dev"
 	commit  = "none"
@@ -30,14 +30,11 @@ func run() error {
 		return err
 	}
 
-	// Logs go to stdout as JSON: the container runtime collects them from
-	// there, and structured output is what makes them queryable once they
-	// reach a log backend.
+	// JSON to stdout, where the container runtime collects it.
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))
 	slog.SetDefault(log)
 
-	// SIGTERM is what Kubernetes sends first when terminating a pod; SIGINT
-	// covers Ctrl-C during local development.
+	// SIGTERM from Kubernetes, SIGINT for Ctrl-C locally.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 

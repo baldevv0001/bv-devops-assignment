@@ -12,8 +12,7 @@ import (
 	"time"
 )
 
-// newTestServer builds a Server with logging discarded and drain timings
-// collapsed, so lifecycle tests do not spend real seconds sleeping.
+// newTestServer builds a Server with logging off and drain timings collapsed.
 func newTestServer(t *testing.T, mutate func(*Config)) *Server {
 	t.Helper()
 
@@ -91,8 +90,7 @@ func TestReadyzReportsNotReadyWhileDraining(t *testing.T) {
 	srv := newTestServer(t, nil)
 	handler := srv.publicRoutes()
 
-	// Liveness must keep passing while draining, otherwise the kubelet would
-	// kill the pod mid-drain instead of letting it finish in-flight requests.
+	// Liveness must keep passing while draining, or the kubelet kills the pod.
 	srv.ready.Store(false)
 
 	for _, tc := range []struct {
@@ -146,9 +144,7 @@ func TestMetricsExposedOnAdminPort(t *testing.T) {
 	}
 }
 
-// A replica that has served nothing must still export the request series, or
-// rate() over a fresh pod sees a missing series rather than zero and alerts
-// silently fail to evaluate.
+// A replica that has served nothing must still export the request series.
 func TestMetricsAreExportedBeforeAnyRequest(t *testing.T) {
 	srv := newTestServer(t, nil)
 
@@ -171,9 +167,7 @@ func TestMetricsAreExportedBeforeAnyRequest(t *testing.T) {
 	}
 }
 
-// The pre-initialised set must not invent combinations the router cannot
-// produce, or the metrics grow permanently-zero series that mislead whoever
-// reads them.
+// Pre-initialised series must not include combinations the router cannot produce.
 func TestNoImpossibleSeriesArePreInitialised(t *testing.T) {
 	srv := newTestServer(t, nil)
 
@@ -210,8 +204,7 @@ func TestUnknownPathsShareOneRouteLabel(t *testing.T) {
 	srv.adminRoutes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	body := rec.Body.String()
 
-	// Every scan must collapse into one series, or an attacker could exhaust
-	// Prometheus memory through label cardinality alone.
+	// Every scan must collapse into one series to bound cardinality.
 	want := `http_requests_total{method="GET",route="other",status="404"} ` + strconv.Itoa(len(scans))
 	if !strings.Contains(body, want) {
 		t.Errorf("expected %q in metrics output, got:\n%s", want, body)
@@ -223,10 +216,7 @@ func TestUnknownPathsShareOneRouteLabel(t *testing.T) {
 	}
 }
 
-// Paths that need cleaning never reach our handlers: net/http's ServeMux
-// answers them with its own redirect. Pinning that here documents why such
-// requests produce no request metric, so the gap is not mistaken for a bug in
-// the instrumentation later.
+// ServeMux redirects paths that need cleaning before any handler runs.
 func TestTraversalPathsAreRedirectedAndNotInstrumented(t *testing.T) {
 	srv := newTestServer(t, nil)
 
@@ -244,8 +234,7 @@ func TestTraversalPathsAreRedirectedAndNotInstrumented(t *testing.T) {
 	if strings.Contains(body, "etc/passwd") {
 		t.Error("cleaned traversal path leaked into a metric label")
 	}
-	// The series exists from startup because it is pre-initialised, so the
-	// assertion is that its value is still zero rather than that it is absent.
+	// The series is pre-initialised, so assert the value is still zero.
 	if !strings.Contains(body, `http_requests_total{method="GET",route="other",status="404"} 0`) {
 		t.Error("mux redirect was unexpectedly counted as a served request")
 	}

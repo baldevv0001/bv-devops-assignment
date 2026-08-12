@@ -1,5 +1,4 @@
-# Entry point for every task in this repository. CI calls these same targets,
-# so what runs locally is what runs in the pipeline.
+# Entry point for every task. CI calls these same targets.
 
 SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
@@ -7,14 +6,13 @@ SHELL := /usr/bin/env bash
 APP_DIR    ?= app
 BINARY     ?= hello-world
 
-# Override REGISTRY/IMAGE_NAME to publish somewhere other than Docker Hub.
+# Override REGISTRY/IMAGE_NAME to publish elsewhere.
 REGISTRY   ?= docker.io
 IMAGE_OWNER?= baldevv0001
 IMAGE_NAME ?= hello-world
 IMAGE      ?= $(REGISTRY)/$(IMAGE_OWNER)/$(IMAGE_NAME)
 
-# Version defaults to the current git describe, falling back to the short SHA
-# on a repository with no tags yet.
+# Falls back to the short SHA when there are no tags.
 VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT     ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
 PLATFORMS  ?= linux/amd64,linux/arm64

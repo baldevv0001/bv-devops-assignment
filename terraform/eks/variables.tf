@@ -50,10 +50,7 @@ variable "vpc_cidr" {
     error_message = "vpc_cidr must be a valid CIDR block."
   }
 
-  # The leading can() short-circuits this rule for input that is not a CIDR at
-  # all. Without it, a value like "10.0.0.0" has no "/" to split on and the
-  # index below fails with a raw "Invalid index" crash instead of the
-  # actionable message from the rule above.
+  # The can() short-circuits input that is not a CIDR, which would crash the split.
   validation {
     condition     = !can(cidrhost(var.vpc_cidr, 0)) || tonumber(split("/", var.vpc_cidr)[1]) <= 20
     error_message = "vpc_cidr must be /20 or larger. Anything smaller cannot be split into six subnets with room for pod IPs, and the VPC CNI hands every pod a real VPC address."
@@ -72,15 +69,7 @@ variable "az_count" {
 }
 
 variable "single_nat_gateway" {
-  description = <<-EOT
-    Route all private subnets through one NAT Gateway instead of one per zone.
-
-    True is a deliberate cost trade-off: it saves roughly USD 0.056/hour per
-    avoided gateway, but the single gateway becomes a zonal single point of
-    failure for outbound traffic. Inbound traffic and pod-to-pod traffic are
-    unaffected, so the cluster keeps serving; nodes in other zones just lose
-    internet egress if that zone fails. Set false for production.
-  EOT
+  description = "One NAT Gateway instead of one per zone. Cheaper, but outbound traffic then depends on a single zone."
   type        = bool
   default     = true
 }
@@ -108,14 +97,7 @@ variable "endpoint_public_access" {
 }
 
 variable "endpoint_public_access_cidrs" {
-  description = <<-EOT
-    Source CIDRs allowed to reach the public API endpoint.
-
-    Defaults to open, because a locked-down default would strand anyone running
-    this for the first time. Narrow it to your own address — see
-    allow_public_api_from_anywhere, which must be set true to actually use the
-    open default.
-  EOT
+  description = "Source CIDRs allowed to reach the public API endpoint. Narrow this to your own address."
   type        = list(string)
   default     = ["0.0.0.0/0"]
 
@@ -124,10 +106,7 @@ variable "endpoint_public_access_cidrs" {
     error_message = "Every entry must be a valid CIDR block, e.g. [\"203.0.113.4/32\"]."
   }
 
-  # Cross-variable references in validation need Terraform 1.9+, which the
-  # required_version already guarantees. Putting the check here rather than in
-  # a resource precondition means it runs during `terraform validate`, with no
-  # AWS credentials and no plan.
+  # Placed here rather than in a resource precondition so it needs no plan.
   validation {
     condition = (
       !var.endpoint_public_access

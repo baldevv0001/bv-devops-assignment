@@ -7,30 +7,22 @@ module "eks" {
 
   vpc_id = module.vpc.vpc_id
 
-  # Nodes and the control plane's cross-account ENIs both live in the private
-  # subnets. Public subnets carry load balancers only.
+  # Nodes and control plane ENIs in private subnets; public carries load balancers.
   subnet_ids               = module.vpc.private_subnets
   control_plane_subnet_ids = module.vpc.private_subnets
 
-  # The private endpoint is always on, so in-cluster traffic to the API never
-  # leaves the VPC. Public access is what lets kubectl work from a laptop, and
-  # is CIDR-restricted by the guard in locals.tf.
+  # Private endpoint always on; public access is CIDR-restricted by a variable guard.
   endpoint_private_access      = true
   endpoint_public_access       = var.endpoint_public_access
   endpoint_public_access_cidrs = var.endpoint_public_access_cidrs
 
-  # API mode drops the old aws-auth ConfigMap in favour of native access
-  # entries, so cluster access is expressed as IAM rather than as a ConfigMap
-  # that no audit trail covers.
+  # Drops the aws-auth ConfigMap for native access entries, so access is IAM.
   authentication_mode = "API"
 
-  # Grants the identity running Terraform cluster-admin, so kubectl works
-  # immediately after apply without a second bootstrapping step.
+  # Gives the identity running Terraform cluster-admin, so kubectl works after apply.
   enable_cluster_creator_admin_permissions = true
 
-  # Envelope encryption for Kubernetes Secrets, using a customer-managed KMS
-  # key created by the module. Without this, Secrets are encrypted only by the
-  # EKS-managed key at the etcd layer.
+  # Envelope encryption for Secrets with a customer-managed key.
   create_kms_key                  = true
   enable_kms_key_rotation         = true
   kms_key_deletion_window_in_days = 7
@@ -39,25 +31,20 @@ module "eks" {
   create_cloudwatch_log_group            = true
   cloudwatch_log_group_retention_in_days = var.cluster_log_retention_days
 
-  # IRSA is not needed: this cluster uses EKS Pod Identity, which associates an
-  # IAM role with a service account through an API object instead of an OIDC
-  # trust policy. Leaving the OIDC provider uncreated removes a moving part.
+  # Not needed: this cluster uses Pod Identity instead of IRSA.
   enable_irsa = false
 
   addons = merge(
     {
-      # before_compute installs the CNI before any node joins. Without it a
-      # node can come up, fail to get pod networking, and sit NotReady.
+      # Installed before any node joins, or a node comes up without pod networking.
       vpc-cni = {
         before_compute = true
         configuration_values = jsonencode({
           env = {
-            # Prefix delegation raises the pod-per-node ceiling considerably by
-            # assigning /28 prefixes instead of individual secondary IPs.
+            # Raises the pod-per-node ceiling by assigning /28 prefixes.
             ENABLE_PREFIX_DELEGATION = "true"
             WARM_PREFIX_TARGET       = "1"
-            # Enforce NetworkPolicy in the data plane. The chart's policy is
-            # inert without this.
+            # The chart's NetworkPolicy is inert without this.
             ENABLE_NETWORK_POLICY = "true"
           }
         })
@@ -65,13 +52,11 @@ module "eks" {
       kube-proxy = {}
       coredns = {
         configuration_values = jsonencode({
-          # Two replicas so DNS survives a single node loss. CoreDNS failure
-          # looks like every service in the cluster breaking at once.
+          # Two replicas so DNS survives losing a node.
           replicaCount = 2
         })
       }
-      # The agent that serves credentials to pods using Pod Identity. Nothing
-      # else in this configuration works without it.
+      # Serves credentials to pods using Pod Identity.
       eks-pod-identity-agent = {
         before_compute = true
       }
@@ -81,8 +66,7 @@ module "eks" {
     } : {},
     var.enable_ebs_csi_driver ? {
       aws-ebs-csi-driver = {
-        # Pod Identity in place of IRSA: no OIDC provider, no trust policy
-        # JSON, just an association between a role and a service account.
+        # Pod Identity: an association between a role and a service account.
         pod_identity_association = [{
           role_arn        = module.ebs_csi_pod_identity[0].iam_role_arn
           service_account = "ebs-csi-controller-sa"
@@ -93,8 +77,7 @@ module "eks" {
 
   eks_managed_node_groups = {
     default = {
-      # AL2023 is the current EKS-optimised AMI family; Amazon Linux 2 is
-      # end-of-life for new EKS versions.
+      # AL2023 is the current EKS-optimised AMI family.
       ami_type       = "AL2023_x86_64_STANDARD"
       instance_types = var.node_instance_types
       capacity_type  = var.node_capacity_type
@@ -103,8 +86,7 @@ module "eks" {
       max_size     = var.node_max_size
       desired_size = var.node_desired_size
 
-      # Spanning every private subnet is what puts a node in each zone, which
-      # is the precondition for the workload's zone spread constraint.
+      # Spanning every private subnet puts a node in each zone.
       subnet_ids = module.vpc.private_subnets
 
       block_device_mappings = {
@@ -120,19 +102,14 @@ module "eks" {
       }
 
       metadata_options = {
-        # IMDSv2 only. IMDSv1's unauthenticated GET is what turns a
-        # server-side request forgery bug into stolen node credentials.
+        # IMDSv2 only, so an SSRF bug cannot read node credentials.
         http_endpoint = "enabled"
         http_tokens   = "required"
-        # A hop limit of 1 means the response never survives the extra network
-        # hop out of a pod's namespace, so pods cannot reach IMDS at all. That
-        # is the intent: workloads get credentials through Pod Identity, not by
-        # borrowing the node's role.
+        # Hop limit 1 stops pods reaching IMDS; they use Pod Identity instead.
         http_put_response_hop_limit = 1
       }
 
-      # Surface node failures as replacements instead of leaving a NotReady
-      # node in the group indefinitely.
+      # Replace failed nodes instead of leaving them NotReady.
       node_repair_config = {
         enabled = true
       }
@@ -149,9 +126,7 @@ module "eks" {
     }
   }
 
-  # Allows the control plane to reach webhook and metrics ports on the nodes.
-  # Without it, admission webhooks and metrics-server scraping time out in ways
-  # that are tedious to diagnose.
+  # Lets the control plane reach webhook and metrics ports on the nodes.
   node_security_group_enable_recommended_rules = true
 
   tags = local.tags

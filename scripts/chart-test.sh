@@ -1,14 +1,6 @@
 #!/usr/bin/env bash
-#
-# Exercises the hello-world chart on the local kind cluster.
-#
-# This goes beyond "does it install": it asserts the properties the chart
-# claims to provide — replicas spread across zones, a disruption budget that
-# actually holds during a node drain, a hardened pod, and a rolling update that
-# drops no requests. Run scripts/kind-up.sh first.
-#
-# Usage: scripts/chart-test.sh [--keep]
-#   --keep   leave the release installed for manual inspection
+# Exercises the chart on kind: spread, disruption budget, hardening, rollout.
+# Usage: scripts/chart-test.sh [--keep]   (run scripts/kind-up.sh first)
 
 set -euo pipefail
 
@@ -23,10 +15,7 @@ CURL_IMAGE="curlimages/curl:8.19.0"
 KEEP=0
 FAILURES=0
 
-# Selects the workload pods only. The trailing "!component" term excludes the
-# helm-test pod, which carries the same instance and name labels but sets
-# app.kubernetes.io/component=test; without it a lingering test pod would be
-# counted as a replica.
+# Workload pods only. The !component term excludes the helm-test pod.
 SELECTOR="app.kubernetes.io/instance=${RELEASE},app.kubernetes.io/name=hello-world,!app.kubernetes.io/component"
 
 [[ "${1:-}" == "--keep" ]] && KEEP=1
@@ -43,10 +32,7 @@ check() {
   if [[ "$2" == "$3" ]]; then pass "$1"; else fail "$1 (expected '$2', got '$3')"; fi
 }
 
-# Creates a namespace, first waiting out any Terminating leftover from a
-# previous run. A namespace in Terminating still exists, so `create` is a no-op
-# against it, but it rejects new pods — which shows up as a confusing
-# "unreachable" failure rather than an obvious one.
+# Creates a namespace, waiting out any Terminating leftover from a previous run.
 ensure_namespace() {
   local ns="$1"
   for _ in $(seq 1 60); do
@@ -56,15 +42,9 @@ ensure_namespace() {
   k create namespace "$ns" --dry-run=client -o yaml | k apply -f - >/dev/null
 }
 
-# Prints "name node ready" for each pod of the release, skipping any that are
-# terminating.
-#
-# This filter matters: a pod being deleted keeps reporting ready=true until its
-# readiness probe fails, which here takes 2 failures x 5s. Helm's --wait
-# returns as soon as the new ReplicaSet is fully ready, so for a few seconds
-# after a rollout there are legitimately four "ready" pods — three new plus one
-# still draining. Counting those raw double-counts the outgoing replica and
-# also makes it look like two replicas share a zone.
+# Prints "name node ready" per pod, skipping terminating ones. A deleting pod
+# still reports ready=true until its readiness probe fails, which would
+# double-count the outgoing replica just after a rollout.
 live_pods() {
   k get pods -n "$NAMESPACE" -l "$SELECTOR" \
     -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.nodeName}{"\t"}{.status.containerStatuses[0].ready}{"\t"}{.metadata.deletionTimestamp}{"\n"}{end}' \
@@ -85,12 +65,8 @@ wait_for_live_ready() {
   return 1
 }
 
-# Runs curl from a throwaway pod and prints whatever it received.
-#
-# Each invocation gets a unique pod name. Reusing one name breaks as soon as a
-# probe is *expected* to fail: `kubectl run --rm` can leave the pod behind when
-# the command exits non-zero, and the next run then dies on a name collision
-# instead of testing anything.
+# Runs curl from a throwaway pod. Each call uses a unique name, because a probe
+# that is expected to fail can leave its pod behind and collide with the next.
 PROBE_SEQ=0
 probe() {
   local ns="$1" url="$2" name
@@ -108,12 +84,8 @@ cleanup() {
   k uncordon --all >/dev/null 2>&1 || true
   if [[ "$KEEP" -eq 0 ]]; then
     h uninstall "$RELEASE" --namespace "$NAMESPACE" >/dev/null 2>&1 || true
-    # Only this suite's own namespace. The monitoring namespace is deliberately
-    # left alone: it may hold a real kube-prometheus-stack installation, and
-    # deleting it takes the whole monitoring stack with it while stranding the
-    # operator's admission webhook pointing at a service that no longer exists.
-    # Not waited on, to keep teardown quick — ensure_namespace() at the start
-    # of the next run waits it out instead.
+    # This suite's namespace only. Deleting the monitoring namespace would take a
+    # real kube-prometheus-stack with it and strand its admission webhook.
     k delete namespace "$NAMESPACE" --ignore-not-found --wait=false >/dev/null 2>&1 || true
   fi
 }
@@ -128,16 +100,13 @@ fi
 # ---------------------------------------------------------------------------
 section "Reset"
 
-# A release left behind by a previous --keep run makes this suite lie. The
-# server-side dry-run below would fail on "nodePort 30080 already allocated",
-# and the replica assertions would count pods from the old revision. Start from
-# a known-empty state instead of assuming one.
+# A release left by a previous --keep run would fail the dry-run on an already
+# allocated nodePort and let old pods be counted as replicas.
 if h status "$RELEASE" --namespace "$NAMESPACE" >/dev/null 2>&1; then
   info "removing an existing '$RELEASE' release from a previous run"
   h uninstall "$RELEASE" --namespace "$NAMESPACE" --wait >/dev/null 2>&1 || true
 fi
-# Only this suite's namespace, for the reason given in cleanup(). The
-# monitoring namespace is created if absent and otherwise reused.
+# The monitoring namespace is created if absent and otherwise reused.
 k delete namespace "$NAMESPACE" --ignore-not-found --wait=true --timeout=120s >/dev/null 2>&1 || true
 k uncordon --all >/dev/null 2>&1 || true
 pass "starting from a clean namespace"
@@ -152,8 +121,7 @@ else
   h lint "$CHART" --values "$VALUES" || true
 fi
 
-# The API server validates the rendered manifests against real schemas, which
-# catches field name and type errors that helm lint cannot see.
+# Validates against real schemas, catching what helm lint cannot see.
 if h template "$RELEASE" "$CHART" --values "$VALUES" --namespace "$NAMESPACE" \
     | k apply --dry-run=server -f - >/dev/null 2>&1; then
   pass "server-side dry-run accepts all manifests"
@@ -171,8 +139,7 @@ else
   fail "HPA did not render with autoscaling enabled"
 fi
 
-# With the HPA owning replicas, the Deployment must not also set them, or Helm
-# and the autoscaler fight over the field on every upgrade.
+# If both set replicas, Helm and the autoscaler fight over the field.
 HPA_DEPLOY="$(sed -n '/kind: Deployment/,/^---/p' <<<"$HPA_RENDER")"
 if grep -q '^  replicas:' <<<"$HPA_DEPLOY"; then
   fail "Deployment still sets replicas while autoscaling is enabled"
@@ -180,7 +147,7 @@ else
   pass "Deployment omits replicas when the HPA owns it"
 fi
 
-# The values schema should reject a wrong type before anything reaches the API.
+# The schema should reject a wrong type before anything reaches the API.
 if h template "$RELEASE" "$CHART" --values "$VALUES" \
     --set-string replicaCount=three >/dev/null 2>&1; then
   fail "values schema accepted a non-integer replicaCount"
@@ -254,8 +221,7 @@ check "no CPU limit set" "" \
 check "memory limit set" "128Mi" \
   "$(k get pod "$POD" -n "$NAMESPACE" -o jsonpath='{.spec.containers[0].resources.limits.memory}')"
 
-# A projected service-account token would appear as a volume mount; with
-# automountServiceAccountToken false there should be none.
+# A mounted token would show up as a kube-api-access volume.
 POD_JSON="$(k get pod "$POD" -n "$NAMESPACE" -o json)"
 if grep -q 'kube-api-access' <<<"$POD_JSON"; then
   fail "a service-account token is mounted into the pod"
@@ -279,8 +245,7 @@ if h test "$RELEASE" --namespace "$NAMESPACE" >/dev/null 2>&1; then
   pass "helm test (endpoints answer through the Service)"
 else
   fail "helm test"
-  # The pod's own logs, not `helm test --logs`, whose tail is the release
-  # NOTES rather than anything about the failure.
+  # The pod's own logs; `helm test --logs` tails the release NOTES instead.
   info "test pod logs:"
   k logs "$TEST_POD" -n "$NAMESPACE" 2>&1 | sed 's/^/          /' || true
   info "termination: $(k get pod "$TEST_POD" -n "$NAMESPACE" \
@@ -289,14 +254,8 @@ fi
 
 METRICS_SVC="${RELEASE}-hello-world-metrics"
 
-# Asserted against build_info rather than http_requests_total: the request
-# counter is a CounterVec with no pre-initialised series, so a replica that has
-# not yet served a request exports no such line, and this Service balances
-# across all three.
-#
-# The probe runs from the monitoring namespace because the NetworkPolicy only
-# admits :9090 from there — and kindnet does enforce that, so probing from
-# anywhere else would (correctly) be dropped.
+# Probed from the monitoring namespace, since the NetworkPolicy only admits
+# :9090 from there.
 ensure_namespace monitoring
 
 METRICS_ALLOWED="$(probe monitoring "http://${METRICS_SVC}.${NAMESPACE}:9090/metrics")"
@@ -306,8 +265,7 @@ else
   fail "metrics not reachable from monitoring on ${METRICS_SVC}:9090"
 fi
 
-# The matching negative case. Without this, a policy that silently failed open
-# would still let the test above pass.
+# The negative case, so a policy that failed open would be caught.
 METRICS_DENIED="$(probe "$NAMESPACE" "http://${METRICS_SVC}:9090/metrics")"
 if grep -q '^hello_world_build_info' <<<"$METRICS_DENIED"; then
   fail "NetworkPolicy did not block :9090 from outside the monitoring namespace"
@@ -329,9 +287,7 @@ check "PDB reports 3 healthy pods" "3" \
 # ---------------------------------------------------------------------------
 section "Zero-downtime rolling update"
 
-# A pod inside the cluster hammers the Service through kube-proxy while the
-# Deployment is rolled. Any dropped request would mean the drain sequence or
-# the maxUnavailable:0 strategy is not doing its job.
+# Hammers the Service from inside the cluster while the Deployment is rolled.
 k run loadgen -n "$NAMESPACE" --image="$CURL_IMAGE" --restart=Never --command -- \
   /bin/sh -c "
     ok=0; fail=0
@@ -358,8 +314,7 @@ h upgrade "$RELEASE" "$CHART" \
 
 pass "rolling update completed"
 
-# Let the outgoing ReplicaSet finish terminating before any later assertion
-# counts pods, so the drain section starts from a settled three.
+# Let the old ReplicaSet finish, so the drain section starts from a settled three.
 wait_for_live_ready 3 || true
 
 k wait --for=jsonpath='{.status.phase}'=Succeeded pod/loadgen -n "$NAMESPACE" --timeout=120s >/dev/null
@@ -397,9 +352,7 @@ else
   fail "only ${STILL_READY} replicas Ready after drain, expected at least 2"
 fi
 
-# Retried: EndpointSlice updates after an eviction are eventually consistent,
-# so a single probe immediately after the drain can race the endpoint being
-# withdrawn and land on nothing.
+# Retried, because EndpointSlice updates after an eviction are eventually consistent.
 SERVING=0
 for attempt in 1 2 3; do
   DRAIN_BODY="$(probe "$NAMESPACE" "http://${RELEASE}-hello-world/")"
@@ -417,8 +370,7 @@ else
   k get endpointslice -n "$NAMESPACE" -o wide || true
 fi
 
-# The evicted replica should stay Pending rather than doubling up in a
-# surviving zone: that refusal is exactly what DoNotSchedule buys.
+# Staying Pending rather than doubling up is what DoNotSchedule buys.
 PENDING="$(k get pods -n "$NAMESPACE" -l "$SELECTOR" --field-selector=status.phase=Pending \
   -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | grep -c . || true)"
 if [[ "$PENDING" -ge 1 ]]; then

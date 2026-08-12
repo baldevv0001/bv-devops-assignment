@@ -1,11 +1,6 @@
 #!/usr/bin/env bash
-#
 # Installs kube-prometheus-stack and wires the application into it.
-#
 # Usage: scripts/install-monitoring.sh [kind|eks]
-#
-# Both environments share monitoring/values/common.yaml and layer an
-# environment file on top, so the two deployments differ only where they must.
 
 set -euo pipefail
 
@@ -40,8 +35,7 @@ echo "==> Installing kube-prometheus-stack ${CHART_VERSION} for ${ENVIRONMENT}"
 
 "${KUBECTL[@]}" create namespace "$NAMESPACE" --dry-run=client -o yaml | "${KUBECTL[@]}" apply -f - >/dev/null
 
-# Grafana's admin password comes from a Secret so it is never committed and
-# never appears in `helm get values`.
+# From a Secret, so the password is never committed or shown by helm.
 if [[ "$ENVIRONMENT" == "eks" ]]; then
   if ! "${KUBECTL[@]}" -n "$NAMESPACE" get secret grafana-admin >/dev/null 2>&1; then
     PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 20)"
@@ -56,8 +50,7 @@ if [[ "$ENVIRONMENT" == "eks" ]]; then
   fi
 fi
 
-# The CRDs in this chart are large enough to exceed the annotation size limit
-# that client-side apply uses, so server-side apply is required.
+# The chart's CRDs are large, so this can take a few minutes.
 "${HELM[@]}" upgrade --install "$RELEASE" prometheus-community/kube-prometheus-stack \
   --version "$CHART_VERSION" \
   --namespace "$NAMESPACE" \

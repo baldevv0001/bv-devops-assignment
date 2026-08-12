@@ -1,10 +1,5 @@
-# Development environment.
-#
-# Apply with:
+# Development environment. Apply with:
 #   terraform apply -var-file=environments/dev.tfvars
-#
-# Everything here is cost-conscious: this environment exists to be created,
-# demonstrated, and destroyed the same day.
 
 region      = "ap-south-1"
 project     = "bv-devops"
@@ -20,17 +15,14 @@ enable_flow_logs   = false # CloudWatch ingestion cost, not needed for a demo
 kubernetes_version     = "1.34"
 endpoint_public_access = true
 
-# IMPORTANT: replace with your own address before applying.
-#   curl -s https://checkip.amazonaws.com
-# Leaving this open requires allow_public_api_from_anywhere = true, which the
-# guard in locals.tf enforces.
+# Replace with your own address before applying: curl -s https://checkip.amazonaws.com
 endpoint_public_access_cidrs   = ["0.0.0.0/0"]
 allow_public_api_from_anywhere = true
 
 cluster_log_types          = ["api", "audit", "authenticator"]
 cluster_log_retention_days = 7
 
-# Nodes: three t3.medium, one per zone.
+# Three t3.medium, one per zone.
 node_instance_types = ["t3.medium"]
 node_capacity_type  = "ON_DEMAND"
 node_desired_size   = 3

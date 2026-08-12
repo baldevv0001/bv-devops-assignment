@@ -1,11 +1,5 @@
 {{- if .Values.serviceMonitor.enabled }}
-{{/*
-Requires the prometheus-operator CRDs, which is why this is off by default:
-rendering a ServiceMonitor on a cluster without them fails the install with an
-unhelpful "no matches for kind" error.
-
-It targets the metrics Service, not the main one, so scraping stays on :9090.
-*/}}
+{{/* Needs the prometheus-operator CRDs. Targets the metrics Service on 9090. */}}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:

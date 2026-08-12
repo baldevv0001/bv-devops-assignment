@@ -1,14 +1,5 @@
 {{- if .Values.grafanaDashboard.enabled }}
-{{/*
-The dashboard is delivered as a labelled ConfigMap rather than through the
-Grafana API. kube-prometheus-stack runs a sidecar that watches for ConfigMaps
-carrying a specific label and drops their contents into Grafana's provisioning
-directory, so no credentials, no API calls and no ordering dependency on
-Grafana being up.
-
-The JSON lives in dashboards/hello-world.json rather than inline, so it stays
-readable and can be validated on its own.
-*/}}
+{{/* A labelled ConfigMap the Grafana sidecar loads. No credentials or API calls. */}}
 apiVersion: v1
 kind: ConfigMap
 metadata:

@@ -1,17 +1,11 @@
-# Overrides for the local kind cluster.
-#
-# Layered on top of common.yaml. Everything here exists because the laptop
-# running kind has finite memory, not because the configuration should differ
-# in principle.
+# Local kind overrides on top of common.yaml, mostly to fit in laptop memory.
 
 prometheus:
   prometheusSpec:
     retention: 2h
     replicas: 1
 
-    # emptyDir rather than a PersistentVolume: kind has no CSI driver, so a PVC
-    # would stay Pending forever and Prometheus would never start. Metrics are
-    # lost when the pod restarts, which is acceptable for a test run.
+    # No PersistentVolume: kind has no CSI driver, so a PVC would stay Pending.
     resources:
       requests:
         cpu: 100m
@@ -33,8 +27,7 @@ grafana:
   replicas: 1
   persistence:
     enabled: false
-  # Local-only credentials. On EKS this comes from a pre-created Secret; see
-  # monitoring/values/eks.yaml.
+  # Local only. On EKS this comes from a Secret; see eks.yaml.
   adminPassword: admin
   service:
     type: NodePort
@@ -66,10 +59,8 @@ prometheusOperator:
     limits:
       memory: 256Mi
 
-# kind runs a single-node control plane whose scheduler and controller-manager
-# bind to 127.0.0.1 by default, so these targets cannot be scraped from a pod.
-# Leaving them enabled produces permanently-down targets that make a demo look
-# broken when nothing is.
+# These bind to 127.0.0.1 on kind, so scraping them would leave permanently-down
+# targets that make a working setup look broken.
 kubeControllerManager:
   enabled: false
 kubeScheduler:

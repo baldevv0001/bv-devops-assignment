@@ -1,8 +1,7 @@
 data "aws_availability_zones" "available" {
   state = "available"
 
-  # Local Zones and Wavelength Zones cannot host EKS nodes, so restrict to
-  # regular availability zones.
+  # Local and Wavelength zones cannot host EKS nodes.
   filter {
     name   = "opt-in-status"
     values = ["opt-in-not-required"]
@@ -14,14 +13,8 @@ locals {
 
   azs = slice(data.aws_availability_zones.available.names, 0, var.az_count)
 
-  # Subnets are carved from the VPC CIDR by index. With a /16 and newbits 4
-  # each subnet is a /20 (~4091 usable addresses), which matters because the
-  # Amazon VPC CNI assigns every pod a real VPC IP — pod density is limited by
-  # subnet size, not just by node size.
-  #
-  # Private subnets take the first block of indices, public the next. Public
-  # subnets only ever hold load balancers and NAT gateways, so they are sized
-  # the same for simplicity rather than need.
+  # /16 split into /20s. The VPC CNI gives every pod a real VPC IP, so subnet
+  # size caps pod density. Private subnets take the first indices, public the next.
   private_subnets = [for i in range(var.az_count) : cidrsubnet(var.vpc_cidr, 4, i)]
   public_subnets  = [for i in range(var.az_count) : cidrsubnet(var.vpc_cidr, 4, i + var.az_count)]
 
@@ -36,6 +29,4 @@ locals {
   )
 }
 
-# Guards for API exposure and node sizing live in variable validation blocks in
-# variables.tf rather than in resource preconditions here, so that
-# `terraform validate` catches them without AWS credentials or a plan.
+# Guards for API exposure and node sizing are variable validations in variables.tf.

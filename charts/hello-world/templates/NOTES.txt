@@ -48,10 +48,8 @@ Prometheus is scraping {{ include "hello-world.metricsServiceName" . }}:{{ .Valu
 
 {{- if and .Values.networkPolicy.enabled .Values.networkPolicy.restrictEgress }}
 
-A NetworkPolicy restricts this workload to DNS egress only, and permits the
-metrics port only from the monitoring namespace. Enforcement requires a CNI
-that implements NetworkPolicy — Amazon VPC CNI, Calico and recent kindnet all
-do. Confirm the metrics rule is actually being enforced with:
+A NetworkPolicy restricts egress to DNS and permits the metrics port only from
+the monitoring namespace. Confirm it is enforced with:
 
     kubectl run probe --rm -i --image=curlimages/curl:8.19.0 -n default --restart=Never \
       -- curl -sS --max-time 5 http://{{ include "hello-world.metricsServiceName" . }}.{{ .Release.Namespace }}:{{ .Values.metricsService.port }}/metrics
@@ -62,6 +60,5 @@ return metrics.
 
 {{- if not .Values.resources.limits.cpu }}
 
-Note: no CPU limit is set, by design. See the comment on resources.limits.cpu
-in values.yaml.
+Note: no CPU limit is set, by design. See resources.limits.cpu in values.yaml.
 {{- end }}

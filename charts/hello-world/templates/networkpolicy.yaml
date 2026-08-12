@@ -1,13 +1,5 @@
 {{- if .Values.networkPolicy.enabled }}
-{{/*
-A NetworkPolicy is allow-list only: naming a pod in one at all switches it to
-default-deny for the listed policyTypes. Both Ingress and Egress are listed
-here, so anything not explicitly permitted below is dropped.
-
-Requires a CNI that enforces NetworkPolicy. Amazon VPC CNI, Calico and recent
-kindnet all do — enforcement of the metrics rule below is verified on kind in
-scripts/chart-test.sh, from both an allowed and a denied namespace.
-*/}}
+{{/* Allow-list only: anything not listed below is dropped. Needs a CNI that enforces it. */}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -22,17 +14,7 @@ spec:
   podSelector:
     matchLabels:
       {{- include "hello-world.selectorLabels" . | nindent 6 }}
-    # Selects the workload pods only.
-    #
-    # The selector labels alone also match the helm-test pod, which carries the
-    # same name and instance labels. That pod would then inherit the DNS-only
-    # egress rule below, and since the policy is programmed a moment after the
-    # pod starts, its first request or two succeed and the rest time out — a
-    # failure that moves between requests from run to run and looks like a
-    # flaky test rather than a policy problem.
-    #
-    # Workload pods carry no component label; helpers such as the test pod set
-    # one, so requiring its absence keeps the policy scoped to the real thing.
+    # Excludes helper pods such as the helm test pod, which set a component label.
     matchExpressions:
       - key: app.kubernetes.io/component
         operator: DoesNotExist
@@ -42,10 +24,7 @@ spec:
     - Egress
     {{- end }}
   ingress:
-    # HTTP. Packets arriving through a cloud load balancer carry no pod or
-    # namespace identity to match on, so restricting the source here would
-    # break external ingress entirely. Narrow the exposure at the load
-    # balancer with service.loadBalancerSourceRanges instead.
+    # Load balancer traffic has no pod or namespace identity to match on.
     {{- if .Values.networkPolicy.allowAllHTTPIngress }}
     - ports:
         - port: http
@@ -57,9 +36,7 @@ spec:
         - port: http
           protocol: TCP
     {{- end }}
-    # Metrics. Only the monitoring namespace may reach :9090, so the endpoint
-    # is unreachable from other workloads even though it listens on every
-    # interface inside the pod.
+    # Only the monitoring namespace may reach the metrics port.
     {{- with .Values.networkPolicy.metricsFrom }}
     - from:
         {{- toYaml . | nindent 8 }}
@@ -69,9 +46,7 @@ spec:
     {{- end }}
   {{- if .Values.networkPolicy.restrictEgress }}
   egress:
-    # DNS to kube-dns is the only outbound traffic this service needs. Denying
-    # everything else means a compromised pod cannot reach the EC2 metadata
-    # endpoint, the Kubernetes API, other namespaces, or the internet.
+    # DNS is the only outbound traffic this service needs.
     - to:
         - namespaceSelector:
             matchLabels:

@@ -10,17 +10,14 @@ coverage.html
 *.tfstate.*
 crash.log
 crash.*.log
-# tfvars can carry account IDs and other environment detail, so they are
-# excluded by default. The per-environment files under terraform/*/environments
-# are the exception: they hold only region, sizing and CIDR choices, and are
-# meant to be read as part of the configuration.
+# tfvars can carry account detail, so they are excluded. The per-environment
+# files hold only region, sizing and CIDR choices, so they are kept.
 *.auto.tfvars
 *.tfvars
 !*.tfvars.example
 !terraform/*/environments/*.tfvars
 
-# Terraform lock files ARE committed: they pin provider checksums, which is
-# what makes a plan reproducible across machines and in CI.
+# Lock files are committed: they pin provider checksums for reproducible plans.
 !.terraform.lock.hcl
 override.tf
 override.tf.json
@@ -35,7 +32,7 @@ tfplan
 charts/**/charts/
 *.tgz
 
-# Credentials — never commit these
+# Credentials
 .env
 *.pem
 *.key

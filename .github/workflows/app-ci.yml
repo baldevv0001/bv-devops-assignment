@@ -1,9 +1,5 @@
-# Continuous integration for the Go microservice.
-#
-# This workflow only ever validates: it builds the image and exercises it, but
-# never pushes anywhere and needs no secrets, so it runs safely on pull
-# requests from forks. Publishing and deployment are added in the pipeline
-# stage of this project.
+# CI for the Go microservice. Builds and tests the image but never pushes, and
+# needs no secrets, so it is safe on pull requests from forks.
 name: app-ci
 
 on:
@@ -22,11 +18,11 @@ on:
       - '.github/workflows/app-ci.yml'
   workflow_dispatch:
 
-# The default token needs nothing beyond reading the repository here.
+# Read-only token is all this needs.
 permissions:
   contents: read
 
-# A new push to the same branch makes an in-flight run redundant.
+# A new push makes an in-flight run redundant.
 concurrency:
   group: app-ci-${{ github.ref }}
   cancel-in-progress: true
@@ -61,8 +57,7 @@ jobs:
       - name: Vet
         run: make vet
 
-      # Race detection needs cgo, which the hosted runners provide. This is the
-      # main reason tests run here rather than only locally.
+      # Race detection needs cgo, which hosted runners have.
       - name: Test with race detector
         run: make test-race
 
@@ -97,5 +92,7 @@ jobs:
       - name: Smoke-test the image
         run: ./scripts/smoke-test.sh hello-world:ci
 
+      # Block scalar: a plain value containing ": " would be read as a mapping.
       - name: Report image size
-        run: docker image inspect hello-world:ci --format 'image size: {{.Size}} bytes'
+        run: |
+          docker image inspect hello-world:ci --format 'image size: {{.Size}} bytes'

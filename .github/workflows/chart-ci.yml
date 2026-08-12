@@ -1,8 +1,5 @@
-# Continuous integration for the Helm chart.
-#
-# Lints and renders the chart, then installs it on a three-zone kind cluster
-# and asserts the properties it claims to provide. Like app-ci this never
-# publishes and needs no secrets.
+# CI for the Helm chart. Lints and renders it, then installs it on a three-zone
+# kind cluster and asserts what it claims. Never publishes, needs no secrets.
 name: chart-ci
 
 on:
@@ -58,9 +55,7 @@ jobs:
             --set prometheusRule.enabled=true \
             --set grafanaDashboard.enabled=true > /dev/null
 
-      # The dashboard is embedded into a ConfigMap by indentation. Getting that
-      # wrong produces a ConfigMap that applies cleanly and a dashboard Grafana
-      # silently refuses to load, so parse it back out.
+      # Bad indentation gives a valid ConfigMap and a dashboard Grafana ignores.
       - name: Dashboard JSON survives templating
         run: |
           python3 -c "import json; json.load(open('charts/hello-world/dashboards/hello-world.json'))"
@@ -75,10 +70,7 @@ jobs:
           raise SystemExit(0 if found else 'dashboard ConfigMap was not rendered')
           "
 
-      # A bare "tests/" pattern in .helmignore matches at any depth and silently
-      # drops templates/tests/, so `helm test` works from a directory but does
-      # nothing at all from a package. That failure only surfaces once the chart
-      # is consumed from a registry, so it is asserted here.
+      # A bare "tests/" pattern in .helmignore would drop the hook from packages.
       - name: Packaged chart contains the helm test hook
         run: |
           helm package charts/hello-world --destination /tmp/pkg >/dev/null
@@ -89,8 +81,7 @@ jobs:
           fi
           echo "helm test hook is packaged"
 
-      # The chart refuses configurations that render valid YAML but misbehave
-      # at runtime. If these ever stop failing, the guards have regressed.
+      # If any of these stop failing, a guard has regressed.
       - name: Guards reject invalid configurations
         run: |
           set -eu
@@ -118,8 +109,7 @@ jobs:
         with:
           version: v3.20.0
 
-      # The cluster config carries the fake zone labels that make the topology
-      # spread assertions meaningful.
+      # The config carries the fake zone labels the spread assertions need.
       - name: Create 3-zone kind cluster
         uses: helm/kind-action@v1
         with:

@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
-#
-# Creates the local three-zone kind cluster and loads the application image
-# into it. Idempotent: re-running against an existing cluster just reloads the
-# image.
-#
+# Creates the three-zone kind cluster and loads the app image into it.
 # Usage: scripts/kind-up.sh [image-tag]
 
 set -euo pipefail

@@ -1,18 +1,6 @@
 #!/usr/bin/env bash
-#
-# Creates an encrypted gp3 StorageClass and makes it the cluster default.
-#
-# This is applied after the cluster exists rather than from Terraform. Pointing
-# the kubernetes provider at a cluster created in the same apply gives you a
-# configuration that cannot be applied from scratch in one pass and cannot be
-# destroyed cleanly once the cluster is gone.
-#
-# EKS ships a "gp2" StorageClass marked default, and it is not encrypted. Any
-# PersistentVolumeClaim that names no class lands there, which is a quiet way
-# to end up with unencrypted data. This script demotes it.
-#
+# Creates an encrypted gp3 StorageClass, makes it default and demotes gp2.
 # Usage: scripts/apply-storage-class.sh [kms-key-arn]
-#        (the ARN defaults to the Terraform output)
 
 set -euo pipefail
 
@@ -42,9 +30,7 @@ metadata:
   annotations:
     storageclass.kubernetes.io/is-default-class: "true"
 provisioner: ebs.csi.aws.com
-# WaitForFirstConsumer stops a volume being created in one zone while the pod
-# that needs it is scheduled into another, which leaves the pod permanently
-# unschedulable with a misleading "volume node affinity conflict".
+# WaitForFirstConsumer stops a volume being created in the wrong zone.
 volumeBindingMode: WaitForFirstConsumer
 allowVolumeExpansion: true
 reclaimPolicy: Delete

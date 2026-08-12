@@ -1,22 +1,17 @@
-# Overrides for EKS.
-#
-# Layered on top of common.yaml.
+# EKS overrides on top of common.yaml.
 
 prometheus:
   prometheusSpec:
     retention: 15d
     retentionSize: 18GB
 
-    # A single replica: this is a demonstration cluster, and two replicas would
-    # double the storage cost while still not being a real HA setup (that needs
-    # Thanos or a remote write target for deduplication and long-term storage).
+    # One replica: two would double storage cost without being real HA.
     replicas: 1
 
     storageSpec:
       volumeClaimTemplate:
         spec:
-          # Created by scripts/apply-storage-class.sh, encrypted with the
-          # customer-managed KMS key Terraform provisions.
+          # Created by scripts/apply-storage-class.sh, encrypted with a CMK.
           storageClassName: gp3
           accessModes: ["ReadWriteOnce"]
           resources:
@@ -56,17 +51,13 @@ grafana:
     storageClassName: gp3
     size: 5Gi
 
-  # Read from a Secret created out of band, so no password is committed and
-  # none appears in `helm get values`. scripts/install-monitoring.sh generates
-  # one if it does not exist.
+  # From a Secret, so no password is committed or shown by `helm get values`.
   admin:
     existingSecret: grafana-admin
     userKey: admin-user
     passwordKey: admin-password
 
-  # ClusterIP by default. A public Grafana with no TLS and no SSO is not
-  # something to expose on a load balancer; reach it with:
-  #   kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80
+  # ClusterIP: Grafana has no TLS or SSO here, so reach it with a port-forward.
   service:
     type: ClusterIP
 
@@ -85,11 +76,8 @@ prometheusOperator:
     limits:
       memory: 512Mi
 
-# EKS runs the control plane on AWS-managed infrastructure that is not
-# reachable for scraping. These targets can never come up, so leaving them
-# enabled produces permanent "down" alerts that train everyone to ignore
-# alerts. Control plane metrics come from the API server target and from
-# CloudWatch instead.
+# The EKS control plane is AWS-managed and cannot be scraped, so these would be
+# permanently down.
 kubeControllerManager:
   enabled: false
 kubeScheduler:
@@ -97,9 +85,7 @@ kubeScheduler:
 kubeEtcd:
   enabled: false
 
-# kube-proxy on EKS binds its metrics port to 127.0.0.1 unless reconfigured, so
-# scraping it needs a change to the kube-proxy ConfigMap that is out of scope
-# here.
+# kube-proxy binds to 127.0.0.1 unless its ConfigMap is changed.
 kubeProxy:
   enabled: false
 

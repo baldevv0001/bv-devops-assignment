@@ -1,9 +1,5 @@
 {{- if .Values.ingress.enabled }}
-{{/*
-Optional. On EKS the AWS Load Balancer Controller turns this into an ALB; the
-Service can stay ClusterIP in that case. Disabled by default because a plain
-LoadBalancer Service is enough to expose this workload and needs no controller.
-*/}}
+{{/* Optional. Needs an ingress controller; a LoadBalancer Service does not. */}}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:

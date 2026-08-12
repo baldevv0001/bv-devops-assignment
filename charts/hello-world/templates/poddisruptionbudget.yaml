@@ -1,10 +1,5 @@
 {{- if .Values.podDisruptionBudget.enabled }}
-{{/*
-A PDB constrains *voluntary* disruption only: node drains, cluster upgrades,
-and the descheduler. It cannot protect against a node crashing, which is what
-the topology spread constraints are for. The two work together — spread decides
-where replicas live, the PDB decides how many may be taken away at once.
-*/}}
+{{/* Covers voluntary disruption only, such as node drains and upgrades. */}}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
