@@ -8,7 +8,14 @@
 *.tmp
 *.orig
 *~
-# Test fixtures and CI config are not part of the packaged chart.
-ci/
-tests/
 *.tgz
+
+# Values used only for local kind runs. Anchored with a leading slash so the
+# pattern matches this directory and nothing nested.
+/ci/
+
+# NOTE: do not add a bare "tests/" pattern here. It would match at any depth
+# and silently drop templates/tests/, so `helm test` would work when the chart
+# is installed from this directory but do nothing at all when installed from a
+# package — the failure only shows up once the chart is consumed from a
+# registry. The helm test hook must ship with the chart.

@@ -49,12 +49,45 @@ jobs:
       - name: Render with default values
         run: helm template hello-world charts/hello-world > /dev/null
 
-      - name: Render with LoadBalancer and ingress enabled
+      - name: Render with LoadBalancer, ingress and monitoring enabled
         run: |
           helm template hello-world charts/hello-world \
             --set service.type=LoadBalancer \
             --set ingress.enabled=true \
-            --set serviceMonitor.enabled=true > /dev/null
+            --set serviceMonitor.enabled=true \
+            --set prometheusRule.enabled=true \
+            --set grafanaDashboard.enabled=true > /dev/null
+
+      # The dashboard is embedded into a ConfigMap by indentation. Getting that
+      # wrong produces a ConfigMap that applies cleanly and a dashboard Grafana
+      # silently refuses to load, so parse it back out.
+      - name: Dashboard JSON survives templating
+        run: |
+          python3 -c "import json; json.load(open('charts/hello-world/dashboards/hello-world.json'))"
+          helm template hello-world charts/hello-world --set grafanaDashboard.enabled=true \
+            | python3 -c "
+          import sys, yaml, json
+          found = False
+          for doc in yaml.safe_load_all(sys.stdin):
+              if doc and doc.get('kind') == 'ConfigMap' and 'dashboard' in doc['metadata']['name']:
+                  json.loads(doc['data']['hello-world.json'])
+                  found = True
+          raise SystemExit(0 if found else 'dashboard ConfigMap was not rendered')
+          "
+
+      # A bare "tests/" pattern in .helmignore matches at any depth and silently
+      # drops templates/tests/, so `helm test` works from a directory but does
+      # nothing at all from a package. That failure only surfaces once the chart
+      # is consumed from a registry, so it is asserted here.
+      - name: Packaged chart contains the helm test hook
+        run: |
+          helm package charts/hello-world --destination /tmp/pkg >/dev/null
+          if ! tar -tzf /tmp/pkg/hello-world-*.tgz | grep -q 'templates/tests/test-connection.yaml'; then
+            echo "::error::the helm test hook is missing from the packaged chart; check .helmignore"
+            tar -tzf /tmp/pkg/hello-world-*.tgz
+            exit 1
+          fi
+          echo "helm test hook is packaged"
 
       # The chart refuses configurations that render valid YAML but misbehave
       # at runtime. If these ever stop failing, the guards have regressed.

@@ -134,3 +134,24 @@ See [values.yaml](values.yaml) for the full annotated list.
 | `networkPolicy.restrictEgress` | `true` | DNS-only egress |
 | `resources.limits.cpu` | `""` | Deliberately unset |
 | `serviceMonitor.enabled` | `false` | Needs prometheus-operator CRDs |
+| `prometheusRule.enabled` | `false` | Alert rules; needs the same CRDs |
+| `grafanaDashboard.enabled` | `false` | Dashboard ConfigMap for the Grafana sidecar |
+
+## Observability
+
+Three optional templates wire the service into kube-prometheus-stack. All are
+off by default, because rendering them on a cluster without the
+prometheus-operator CRDs fails the install with an unhelpful "no matches for
+kind" error.
+
+- **`serviceMonitor.enabled`** — scrapes the metrics Service on `:9090`.
+- **`prometheusRule.enabled`** — six alerts covering availability, error rate,
+  latency and zone spread.
+- **`grafanaDashboard.enabled`** — renders `dashboards/hello-world.json` into a
+  labelled ConfigMap that the Grafana sidecar loads. No Grafana credentials and
+  no API calls are involved.
+
+Alerts ship with the chart rather than with the monitoring release so that a
+rule always matches the version of the application it was written for. See
+[monitoring/README.md](../../monitoring/README.md) for what each alert does and
+why its expression is shaped the way it is.

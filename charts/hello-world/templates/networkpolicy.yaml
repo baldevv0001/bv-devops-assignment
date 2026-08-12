@@ -22,6 +22,20 @@ spec:
   podSelector:
     matchLabels:
       {{- include "hello-world.selectorLabels" . | nindent 6 }}
+    # Selects the workload pods only.
+    #
+    # The selector labels alone also match the helm-test pod, which carries the
+    # same name and instance labels. That pod would then inherit the DNS-only
+    # egress rule below, and since the policy is programmed a moment after the
+    # pod starts, its first request or two succeed and the rest time out — a
+    # failure that moves between requests from run to run and looks like a
+    # flaky test rather than a policy problem.
+    #
+    # Workload pods carry no component label; helpers such as the test pod set
+    # one, so requiring its absence keeps the policy scoped to the real thing.
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: DoesNotExist
   policyTypes:
     - Ingress
     {{- if .Values.networkPolicy.restrictEgress }}

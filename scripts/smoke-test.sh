@@ -127,7 +127,8 @@ fi
 EXIT_CODE="$(timeout 30 docker wait "$CONTAINER" || echo timeout)"
 check "container exits cleanly after SIGTERM" "0" "$EXIT_CODE"
 
-if docker logs "$CONTAINER" 2>&1 | grep -q '"msg":"shutdown complete"'; then
+CONTAINER_LOGS="$(docker logs "$CONTAINER" 2>&1)"
+if grep -q '"msg":"shutdown complete"' <<<"$CONTAINER_LOGS"; then
   pass "logged a completed shutdown"
 else
   fail "no shutdown-complete log line"

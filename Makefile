@@ -142,6 +142,36 @@ chart-test: ## Run the full chart test suite against kind
 chart-test-keep: ## Same, but leave the release installed for inspection
 	scripts/chart-test.sh --keep
 
+## --- Monitoring -------------------------------------------------------------
+
+.PHONY: monitoring-install
+monitoring-install: ## Install kube-prometheus-stack on kind
+	scripts/install-monitoring.sh kind
+
+.PHONY: monitoring-install-eks
+monitoring-install-eks: ## Install kube-prometheus-stack on EKS
+	scripts/install-monitoring.sh eks
+
+.PHONY: monitoring-test
+monitoring-test: ## Verify scraping, rules, dashboards and cluster metrics
+	scripts/monitoring-test.sh kind
+
+.PHONY: monitoring-test-alert
+monitoring-test-alert: ## Same, plus a real outage to prove an alert reaches Alertmanager
+	scripts/monitoring-test.sh kind --fire-alert
+
+.PHONY: grafana
+grafana: ## Port-forward Grafana to http://localhost:3000
+	kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80
+
+.PHONY: prometheus
+prometheus: ## Port-forward Prometheus to http://localhost:9090
+	kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9090:9090
+
+.PHONY: storage-class
+storage-class: ## Apply the encrypted gp3 StorageClass on EKS
+	scripts/apply-storage-class.sh
+
 ## --- Terraform --------------------------------------------------------------
 
 TF_DIR   ?= terraform/eks

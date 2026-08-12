@@ -13,7 +13,8 @@ CLUSTER_NAME="hello-world"
 IMAGE="${1:-hello-world:ci}"
 
 echo "==> Cluster"
-if kind get clusters 2>/dev/null | grep -qx "$CLUSTER_NAME"; then
+CLUSTERS="$(kind get clusters 2>/dev/null || true)"
+if grep -qx "$CLUSTER_NAME" <<<"$CLUSTERS"; then
   echo "    '$CLUSTER_NAME' already exists, reusing it"
 else
   kind create cluster --config "${REPO_ROOT}/test/kind/cluster.yaml" --wait 120s

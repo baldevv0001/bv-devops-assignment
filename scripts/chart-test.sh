@@ -56,12 +56,6 @@ ensure_namespace() {
   k create namespace "$ns" --dry-run=client -o yaml | k apply -f - >/dev/null
 }
 
-# Runs curl from a throwaway pod and prints whatever it received.
-#
-# Each invocation gets a unique pod name. Reusing one name breaks as soon as a
-# probe is *expected* to fail: `kubectl run --rm` can leave the pod behind when
-# the command exits non-zero, and the next run then dies on a name collision
-# instead of testing anything.
 # Prints "name node ready" for each pod of the release, skipping any that are
 # terminating.
 #
@@ -91,6 +85,12 @@ wait_for_live_ready() {
   return 1
 }
 
+# Runs curl from a throwaway pod and prints whatever it received.
+#
+# Each invocation gets a unique pod name. Reusing one name breaks as soon as a
+# probe is *expected* to fail: `kubectl run --rm` can leave the pod behind when
+# the command exits non-zero, and the next run then dies on a name collision
+# instead of testing anything.
 PROBE_SEQ=0
 probe() {
   local ns="$1" url="$2" name
@@ -108,14 +108,19 @@ cleanup() {
   k uncordon --all >/dev/null 2>&1 || true
   if [[ "$KEEP" -eq 0 ]]; then
     h uninstall "$RELEASE" --namespace "$NAMESPACE" >/dev/null 2>&1 || true
-    # Not waited on, to keep teardown quick. ensure_namespace() at the start of
-    # the next run waits these out instead.
-    k delete namespace "$NAMESPACE" monitoring --ignore-not-found --wait=false >/dev/null 2>&1 || true
+    # Only this suite's own namespace. The monitoring namespace is deliberately
+    # left alone: it may hold a real kube-prometheus-stack installation, and
+    # deleting it takes the whole monitoring stack with it while stranding the
+    # operator's admission webhook pointing at a service that no longer exists.
+    # Not waited on, to keep teardown quick — ensure_namespace() at the start
+    # of the next run waits it out instead.
+    k delete namespace "$NAMESPACE" --ignore-not-found --wait=false >/dev/null 2>&1 || true
   fi
 }
 trap cleanup EXIT
 
-if ! kind get clusters 2>/dev/null | grep -qx "$CLUSTER_NAME"; then
+CLUSTERS="$(kind get clusters 2>/dev/null || true)"
+if ! grep -qx "$CLUSTER_NAME" <<<"$CLUSTERS"; then
   echo "kind cluster '$CLUSTER_NAME' not found. Run scripts/kind-up.sh first." >&2
   exit 1
 fi
@@ -131,7 +136,9 @@ if h status "$RELEASE" --namespace "$NAMESPACE" >/dev/null 2>&1; then
   info "removing an existing '$RELEASE' release from a previous run"
   h uninstall "$RELEASE" --namespace "$NAMESPACE" --wait >/dev/null 2>&1 || true
 fi
-k delete namespace "$NAMESPACE" monitoring --ignore-not-found --wait=true --timeout=120s >/dev/null 2>&1 || true
+# Only this suite's namespace, for the reason given in cleanup(). The
+# monitoring namespace is created if absent and otherwise reused.
+k delete namespace "$NAMESPACE" --ignore-not-found --wait=true --timeout=120s >/dev/null 2>&1 || true
 k uncordon --all >/dev/null 2>&1 || true
 pass "starting from a clean namespace"
 
@@ -157,9 +164,8 @@ else
 fi
 
 # The HPA is disabled for the kind run, so verify that path by rendering it.
-if h template "$RELEASE" "$CHART" --values "$VALUES" \
-    --set autoscaling.enabled=true \
-    | grep -q 'kind: HorizontalPodAutoscaler'; then
+HPA_RENDER="$(h template "$RELEASE" "$CHART" --values "$VALUES" --set autoscaling.enabled=true 2>/dev/null || true)"
+if grep -q 'kind: HorizontalPodAutoscaler' <<<"$HPA_RENDER"; then
   pass "HPA renders when autoscaling is enabled"
 else
   fail "HPA did not render with autoscaling enabled"
@@ -167,8 +173,8 @@ fi
 
 # With the HPA owning replicas, the Deployment must not also set them, or Helm
 # and the autoscaler fight over the field on every upgrade.
-if h template "$RELEASE" "$CHART" --values "$VALUES" --set autoscaling.enabled=true \
-    | sed -n '/kind: Deployment/,/^---/p' | grep -q '^  replicas:'; then
+HPA_DEPLOY="$(sed -n '/kind: Deployment/,/^---/p' <<<"$HPA_RENDER")"
+if grep -q '^  replicas:' <<<"$HPA_DEPLOY"; then
   fail "Deployment still sets replicas while autoscaling is enabled"
 else
   pass "Deployment omits replicas when the HPA owns it"
@@ -250,7 +256,8 @@ check "memory limit set" "128Mi" \
 
 # A projected service-account token would appear as a volume mount; with
 # automountServiceAccountToken false there should be none.
-if k get pod "$POD" -n "$NAMESPACE" -o json | grep -q 'kube-api-access'; then
+POD_JSON="$(k get pod "$POD" -n "$NAMESPACE" -o json)"
+if grep -q 'kube-api-access' <<<"$POD_JSON"; then
   fail "a service-account token is mounted into the pod"
 else
   pass "no service-account token mounted"
@@ -266,11 +273,18 @@ check "policy covers both ingress and egress" "Ingress Egress" "$POLICY_TYPES"
 # ---------------------------------------------------------------------------
 section "Service and metrics wiring"
 
-if h test "$RELEASE" --namespace "$NAMESPACE" --logs >/dev/null 2>&1; then
+TEST_POD="${RELEASE}-hello-world-test-connection"
+k delete pod "$TEST_POD" -n "$NAMESPACE" --ignore-not-found --now >/dev/null 2>&1 || true
+if h test "$RELEASE" --namespace "$NAMESPACE" >/dev/null 2>&1; then
   pass "helm test (endpoints answer through the Service)"
 else
   fail "helm test"
-  h test "$RELEASE" --namespace "$NAMESPACE" --logs 2>&1 | tail -20 || true
+  # The pod's own logs, not `helm test --logs`, whose tail is the release
+  # NOTES rather than anything about the failure.
+  info "test pod logs:"
+  k logs "$TEST_POD" -n "$NAMESPACE" 2>&1 | sed 's/^/          /' || true
+  info "termination: $(k get pod "$TEST_POD" -n "$NAMESPACE" \
+    -o jsonpath='exit={.status.containerStatuses[0].state.terminated.exitCode} reason={.status.containerStatuses[0].state.terminated.reason}' 2>/dev/null || true)"
 fi
 
 METRICS_SVC="${RELEASE}-hello-world-metrics"
@@ -285,7 +299,8 @@ METRICS_SVC="${RELEASE}-hello-world-metrics"
 # anywhere else would (correctly) be dropped.
 ensure_namespace monitoring
 
-if probe monitoring "http://${METRICS_SVC}.${NAMESPACE}:9090/metrics" | grep -q '^hello_world_build_info'; then
+METRICS_ALLOWED="$(probe monitoring "http://${METRICS_SVC}.${NAMESPACE}:9090/metrics")"
+if grep -q '^hello_world_build_info' <<<"$METRICS_ALLOWED"; then
   pass "metrics reachable from the monitoring namespace"
 else
   fail "metrics not reachable from monitoring on ${METRICS_SVC}:9090"
@@ -293,7 +308,8 @@ fi
 
 # The matching negative case. Without this, a policy that silently failed open
 # would still let the test above pass.
-if probe "$NAMESPACE" "http://${METRICS_SVC}:9090/metrics" | grep -q '^hello_world_build_info'; then
+METRICS_DENIED="$(probe "$NAMESPACE" "http://${METRICS_SVC}:9090/metrics")"
+if grep -q '^hello_world_build_info' <<<"$METRICS_DENIED"; then
   fail "NetworkPolicy did not block :9090 from outside the monitoring namespace"
 else
   pass "NetworkPolicy blocks :9090 from outside the monitoring namespace"
@@ -386,7 +402,8 @@ fi
 # withdrawn and land on nothing.
 SERVING=0
 for attempt in 1 2 3; do
-  if probe "$NAMESPACE" "http://${RELEASE}-hello-world/" | grep -q "Hello World"; then
+  DRAIN_BODY="$(probe "$NAMESPACE" "http://${RELEASE}-hello-world/")"
+  if grep -q "Hello World" <<<"$DRAIN_BODY"; then
     SERVING=1
     [[ "$attempt" -gt 1 ]] && info "served on attempt ${attempt}"
     break

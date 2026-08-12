@@ -1,0 +1,356 @@
+{
+  "uid": "hello-world",
+  "title": "Hello World Service",
+  "description": "Request rate, errors, latency and replica placement for the hello-world service.",
+  "tags": ["hello-world", "application"],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Data source",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0
+      },
+      {
+        "name": "namespace",
+        "label": "Namespace",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "query": "label_values(hello_world_build_info, namespace)",
+        "refresh": 1,
+        "includeAll": false,
+        "current": {},
+        "hide": 0
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Replicas up",
+      "description": "Targets currently responding to scrapes.",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(up{namespace=\"$namespace\", job=~\".*hello-world-metrics\"})",
+          "legendFormat": "up"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 2 },
+              { "color": "green", "value": 3 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Request rate",
+      "description": "Requests per second across all replicas and routes.",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(http_requests_total{namespace=\"$namespace\"}[5m]))",
+          "legendFormat": "rps"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "decimals": 2, "color": { "mode": "fixed", "fixedColor": "blue" } },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Error ratio",
+      "description": "Share of responses with a 5xx status. clamp_min keeps an idle service from dividing by zero and showing NaN.",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(http_requests_total{namespace=\"$namespace\", status=~\"5..\"}[5m])) / clamp_min(sum(rate(http_requests_total{namespace=\"$namespace\"}[5m])), 0.001)",
+          "legendFormat": "5xx"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 0.01 },
+              { "color": "red", "value": 0.05 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "p99 latency",
+      "description": "Excludes probe endpoints, which are frequent and trivially fast and would otherwise mask real user latency.",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{namespace=\"$namespace\", route!=\"/healthz\", route!=\"/readyz\"}[5m])))",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 4,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 0.1 },
+              { "color": "red", "value": 0.5 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Request rate by route",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (route) (rate(http_requests_total{namespace=\"$namespace\"}[5m]))",
+          "legendFormat": "{{route}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Responses by status code",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (status) (rate(http_requests_total{namespace=\"$namespace\"}[5m]))",
+          "legendFormat": "{{status}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 20, "stacking": { "mode": "normal" }, "showPoints": "never" }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": "5.." },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Latency percentiles",
+      "description": "Derived from the histogram, probe endpoints excluded.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(http_request_duration_seconds_bucket{namespace=\"$namespace\", route!=\"/healthz\", route!=\"/readyz\"}[5m])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{namespace=\"$namespace\", route!=\"/healthz\", route!=\"/readyz\"}[5m])))",
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{namespace=\"$namespace\", route!=\"/healthz\", route!=\"/readyz\"}[5m])))",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 0, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "In-flight requests and memory",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(http_requests_in_flight{namespace=\"$namespace\"})",
+          "legendFormat": "in flight"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(go_memstats_alloc_bytes{namespace=\"$namespace\"})",
+          "legendFormat": "heap allocated"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "heap allocated" },
+            "properties": [
+              { "id": "unit", "value": "bytes" },
+              { "id": "custom.axisPlacement", "value": "right" }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      }
+    },
+    {
+      "id": 9,
+      "type": "table",
+      "title": "Replica placement",
+      "description": "One row per pod. Distinct nodes here is what the multi-AZ claim rests on.",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "kube_pod_info{namespace=\"$namespace\", pod=~\".*hello-world.*\"}",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true, "Value": true, "__name__": true, "job": true,
+              "instance": true, "endpoint": true, "service": true, "container": true,
+              "uid": true, "pod_ip": true, "host_ip": true, "namespace": true,
+              "created_by_kind": true, "created_by_name": true, "priority_class": true,
+              "host_network": true, "pod_scheduled": true
+            },
+            "renameByName": { "pod": "Pod", "node": "Node", "node_ip": "Node IP" }
+          }
+        }
+      ],
+      "options": { "showHeader": true }
+    },
+    {
+      "id": 10,
+      "type": "table",
+      "title": "Running build",
+      "description": "Which image is actually serving, read from metrics rather than from image tags.",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "hello_world_build_info{namespace=\"$namespace\"}",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true, "Value": true, "__name__": true, "job": true,
+              "endpoint": true, "service": true, "container": true, "namespace": true
+            },
+            "renameByName": { "version": "Version", "commit": "Commit", "pod": "Pod", "instance": "Instance" }
+          }
+        }
+      ],
+      "options": { "showHeader": true }
+    }
+  ]
+}

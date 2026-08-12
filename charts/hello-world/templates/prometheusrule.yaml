@@ -1,0 +1,135 @@
+{{- if .Values.prometheusRule.enabled }}
+{{/*
+Alerts ship with the chart rather than living in the monitoring stack, so a
+rule always matches the version of the application it was written for. Moving
+them into the Prometheus release would mean an app rollback silently leaves
+alerts referencing metrics that no longer exist.
+
+Requires the prometheus-operator CRDs, hence the enable flag.
+*/}}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "hello-world.fullname" . }}
+  labels:
+    {{- include "hello-world.labels" . | nindent 4 }}
+    {{- with .Values.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  groups:
+    - name: {{ include "hello-world.fullname" . }}.rules
+      rules:
+        # --- Availability -------------------------------------------------
+        - alert: HelloWorldAllReplicasDown
+          expr: |
+            sum(up{job="{{ include "hello-world.metricsServiceName" . }}", namespace="{{ .Release.Namespace }}"}) == 0
+            or
+            absent(up{job="{{ include "hello-world.metricsServiceName" . }}", namespace="{{ .Release.Namespace }}"})
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "All hello-world replicas are down"
+            description: >-
+              No replica of {{ include "hello-world.fullname" . }} in namespace
+              {{ .Release.Namespace }} has responded to a scrape for 2 minutes.
+              The service is completely unavailable.
+            # The absent() arm matters: if every pod disappears there is no
+            # series left to compare against zero, so a bare "== 0" would stop
+            # firing exactly when the outage is total.
+            runbook: "kubectl -n {{ .Release.Namespace }} get pods,events --sort-by=.lastTimestamp"
+
+        - alert: HelloWorldReplicasUnavailable
+          expr: |
+            kube_deployment_status_replicas_available{deployment="{{ include "hello-world.fullname" . }}", namespace="{{ .Release.Namespace }}"}
+            <
+            kube_deployment_spec_replicas{deployment="{{ include "hello-world.fullname" . }}", namespace="{{ .Release.Namespace }}"}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "hello-world is running below its desired replica count"
+            description: >-
+              {{`{{ $value }}`}} replicas available against the desired count for
+              10 minutes. A rolling update explains a few minutes of this; ten
+              suggests pods cannot schedule. With the zone spread constraint set
+              to DoNotSchedule, the usual cause is that no node is available in
+              one of the zones.
+
+        - alert: HelloWorldPodCrashLooping
+          expr: |
+            increase(kube_pod_container_status_restarts_total{namespace="{{ .Release.Namespace }}", pod=~"{{ include "hello-world.fullname" . }}-.*"}[15m]) > 3
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "hello-world pod is restarting repeatedly"
+            description: >-
+              Pod {{`{{ $labels.pod }}`}} restarted more than three times in
+              fifteen minutes. Check whether the liveness probe is failing
+              before the startup probe has finished.
+
+        # --- Errors -------------------------------------------------------
+        - alert: HelloWorldHighErrorRate
+          expr: |
+            (
+              sum(rate(http_requests_total{namespace="{{ .Release.Namespace }}", status=~"5.."}[5m]))
+              /
+              clamp_min(sum(rate(http_requests_total{namespace="{{ .Release.Namespace }}"}[5m])), 0.001)
+            ) > {{ .Values.prometheusRule.errorRateThreshold }}
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "hello-world is returning 5xx responses"
+            description: >-
+              {{`{{ $value | humanizePercentage }}`}} of requests returned 5xx
+              over the last five minutes.
+            # clamp_min keeps the denominator away from zero. Without it, an
+            # idle service divides 0 by 0, producing NaN rather than a value
+            # that can be compared, and the alert never evaluates.
+
+        # --- Latency ------------------------------------------------------
+        - alert: HelloWorldHighLatency
+          expr: |
+            histogram_quantile(
+              0.99,
+              sum by (le) (rate(http_request_duration_seconds_bucket{namespace="{{ .Release.Namespace }}", route!="/healthz", route!="/readyz"}[5m]))
+            ) > {{ .Values.prometheusRule.latencyP99Seconds }}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "hello-world p99 latency is elevated"
+            description: >-
+              99th percentile latency is {{`{{ $value | humanizeDuration }}`}},
+              above the {{ .Values.prometheusRule.latencyP99Seconds }}s
+              threshold. Probe endpoints are excluded so that probe traffic,
+              which is both frequent and trivially fast, cannot mask real user
+              latency.
+
+        # --- Availability topology ----------------------------------------
+        - alert: HelloWorldNotSpreadAcrossZones
+          expr: |
+            count(
+              count by (node) (
+                kube_pod_info{namespace="{{ .Release.Namespace }}", pod=~"{{ include "hello-world.fullname" . }}-.*"}
+                * on (node) group_left(zone) kube_node_labels
+              )
+            ) < {{ .Values.prometheusRule.minZones }}
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "hello-world replicas are not spread across enough zones"
+            description: >-
+              Replicas occupy fewer than {{ .Values.prometheusRule.minZones }}
+              distinct nodes. The deployment claims multi-AZ availability; if
+              this fires, that claim is currently untrue and losing one zone
+              would take out more capacity than expected.
+{{- end }}
